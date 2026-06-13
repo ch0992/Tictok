@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ByteDance DCS Cloud SRE Interview Preparation Hub</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-icon">T</div>
+        <h1 class="logo-text">TikTok Prep</h1>
+      </div>
+      
+      <div class="search-box">
+        <div class="search-input-wrapper">
+          <i class="fa-solid fa-magnifying-glass search-icon"></i>
+          <input type="text" id="searchInput" placeholder="Search questions & code...">
+        </div>
+      </div>
+      
+      <nav class="nav-menu" id="navMenu">
+        <!-- Dynamic sidebar menu items rendered by app.js -->
+      </nav>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content" id="mainContent">
+      <header class="main-header">
+        <div class="header-left">
+          <button class="menu-toggle" id="menuToggle" aria-label="Toggle Navigation Menu">
+            <i class="fa-solid fa-bars"></i>
+          </button>
+          
+          <nav class="top-nav-tabs" id="topNavTabs">
+            <button class="top-tab-btn active" data-category="Behavioral">Behavioral Interview</button>
+            <button class="top-tab-btn" data-category="Linux">Linux Troubleshooting</button>
+            <button class="top-tab-btn" data-category="Coding">Coding Practice</button>
+          </nav>
+        </div>
+        
+        <div class="header-controls">
+          <!-- Active Recall Mode Toggle -->
+          <label class="control-switch" title="Hides answers by default. Click elements to reveal them.">
+            <span>Recall Mode</span>
+            <input type="checkbox" id="activeRecallToggle">
+            <div class="switch-track">
+              <div class="switch-thumb"></div>
+            </div>
+          </label>
+          
+          <!-- Dark/Light Theme Toggle -->
+          <label class="control-switch" title="Toggle between Dark and Light mode.">
+            <span>Light Mode</span>
+            <input type="checkbox" id="themeToggle">
+            <div class="switch-track">
+              <div class="switch-thumb"></div>
+            </div>
+          </label>
+        </div>
+      </header>
+      
+      <!-- Content Body -->
+      <div class="content-body" id="contentArea">
+        <!-- Dynamic study cards rendered by app.js -->
+      </div>
+    </main>
+  </div>
+
+  <!-- Data & Behavior Scripts -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
