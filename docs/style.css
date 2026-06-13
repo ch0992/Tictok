@@ -1427,3 +1427,36 @@ body.light-theme .overview-col {
   line-height: inherit !important;
 }
 
+/* Quick Recall Flashcard Styles */
+.flashcard-element {
+  position: relative;
+  transition: transform 0.2s ease;
+}
+.flashcard-element:hover {
+  transform: translateY(-4px);
+}
+.flashcard-inner {
+  border-radius: 12px;
+}
+.flashcard-front, .flashcard-back {
+  box-sizing: border-box;
+}
+/* Quick Recall mode body override to make navigation cleaner */
+body.quick-recall-mode .sidebar {
+  opacity: 0.3;
+  pointer-events: none;
+  filter: blur(1px);
+}
+body.quick-recall-mode .nav-menu {
+  pointer-events: none;
+}
+
+/* Dashboard styles */
+.radial-progress-bar {
+  transition: background 0.3s ease;
+}
+.progress-bar-wrapper {
+  background: var(--border-color);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+

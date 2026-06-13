@@ -38,13 +38,23 @@
           </button>
           
           <nav class="top-nav-tabs" id="topNavTabs">
-            <button class="top-tab-btn active" data-category="Behavioral">Behavioral Interview</button>
+            <button class="top-tab-btn active" data-category="Dashboard"><i class="fa-solid fa-chart-line" style="margin-right:4px;"></i> Dashboard</button>
+            <button class="top-tab-btn" data-category="Behavioral">Behavioral Interview</button>
             <button class="top-tab-btn" data-category="Linux">Linux Troubleshooting</button>
             <button class="top-tab-btn" data-category="Coding">Coding Practice</button>
           </nav>
         </div>
         
         <div class="header-controls">
+          <!-- Quick Recall Flashcard Mode -->
+          <label class="control-switch" title="Toggle full screen flashcard mode for last-minute review.">
+            <span>Quick Recall</span>
+            <input type="checkbox" id="quickRecallToggle">
+            <div class="switch-track">
+              <div class="switch-thumb"></div>
+            </div>
+          </label>
+
           <!-- Active Recall Mode Toggle -->
           <label class="control-switch" title="Hides answers by default. Click elements to reveal them.">
             <span>Recall Mode</span>

@@ -3,10 +3,11 @@
 document.addEventListener('DOMContentLoaded', () => {
   // Application State
   const state = {
-    currentCategory: localStorage.getItem('study_app_current_category') || 'Behavioral',
+    currentCategory: localStorage.getItem('study_app_current_category') || 'Dashboard',
     currentFileId: null,
     searchQuery: '',
     activeRecall: localStorage.getItem('active_recall_enabled') === 'true',
+    quickRecall: localStorage.getItem('quick_recall_enabled') === 'true',
     theme: localStorage.getItem('study_app_theme') || 'dark',
     statusMap: JSON.parse(localStorage.getItem('study_app_status_map') || '{}'),
     checkboxMap: JSON.parse(localStorage.getItem('study_app_checkbox_map') || '{}'),
@@ -20,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     menuToggle: document.getElementById('menuToggle'),
     themeToggle: document.getElementById('themeToggle'),
     activeRecallToggle: document.getElementById('activeRecallToggle'),
+    quickRecallToggle: document.getElementById('quickRecallToggle'),
     searchInput: document.getElementById('searchInput'),
     navMenu: document.getElementById('navMenu'),
     mainContent: document.getElementById('mainContent'),
@@ -394,6 +396,7 @@ StartLimitBurst=5`,
   el.menuToggle.addEventListener('click', toggleSidebar);
   el.themeToggle.addEventListener('change', toggleTheme);
   el.activeRecallToggle.addEventListener('change', toggleActiveRecall);
+  el.quickRecallToggle.addEventListener('change', toggleQuickRecall);
   el.searchInput.addEventListener('input', handleSearch);
 
   // Top Category Nav Switcher
@@ -404,15 +407,27 @@ StartLimitBurst=5`,
       state.currentCategory = btn.dataset.category;
       localStorage.setItem('study_app_current_category', state.currentCategory);
       
-      // Re-render navigation for this category
-      renderNavigation();
-      
-      // Auto-load first file of this category
-      const categoryFiles = STUDY_DATA.filter(d => d.category === state.currentCategory);
-      if (categoryFiles.length > 0) {
-        loadDocument(categoryFiles[0].id);
+      if (state.quickRecall) {
+        state.quickRecall = false;
+        el.quickRecallToggle.checked = false;
+        toggleQuickRecallClass(false);
+      }
+
+      if (state.currentCategory === 'Dashboard') {
+        state.currentFileId = null;
+        renderNavigation();
+        renderDashboardLayout();
       } else {
-        renderEmptyState();
+        renderNavigation();
+        
+        const categoryFiles = STUDY_DATA.filter(d => d.category === state.currentCategory);
+        if (categoryFiles.length > 0) {
+          const lastViewed = localStorage.getItem(`last_viewed_file_${state.currentCategory}`);
+          const fileExists = categoryFiles.some(d => d.id === lastViewed);
+          loadDocument(fileExists ? lastViewed : categoryFiles[0].id);
+        } else {
+          renderEmptyState();
+        }
       }
     });
   });
@@ -428,17 +443,19 @@ StartLimitBurst=5`,
   renderNavigation();
 
   // Load Initial Document
-  const categoryFiles = STUDY_DATA.filter(d => d.category === state.currentCategory);
-  if (categoryFiles.length > 0) {
-    const lastViewed = localStorage.getItem(`last_viewed_file_${state.currentCategory}`);
-    const fileExists = categoryFiles.some(d => d.id === lastViewed);
-    loadDocument(fileExists ? lastViewed : categoryFiles[0].id);
-  } else if (STUDY_DATA.length > 0) {
-    const firstDoc = STUDY_DATA[0];
-    const categoryBtn = el.topNavTabs.querySelector(`[data-category="${firstDoc.category}"]`);
-    if (categoryBtn) categoryBtn.click();
+  if (state.quickRecall) {
+    renderQuickRecallDeck();
+  } else if (state.currentCategory === 'Dashboard') {
+    renderDashboardLayout();
   } else {
-    renderEmptyState();
+    const categoryFiles = STUDY_DATA.filter(d => d.category === state.currentCategory);
+    if (categoryFiles.length > 0) {
+      const lastViewed = localStorage.getItem(`last_viewed_file_${state.currentCategory}`);
+      const fileExists = categoryFiles.some(d => d.id === lastViewed);
+      loadDocument(fileExists ? lastViewed : categoryFiles[0].id);
+    } else {
+      renderDashboardLayout();
+    }
   }
 
   // --- Core Functions ---
@@ -453,6 +470,8 @@ StartLimitBurst=5`,
     });
 
     el.activeRecallToggle.checked = state.activeRecall;
+    el.quickRecallToggle.checked = state.quickRecall;
+    toggleQuickRecallClass(state.quickRecall);
     
     if (state.theme === 'light') {
       document.body.classList.add('light-theme');
@@ -480,6 +499,40 @@ StartLimitBurst=5`,
     localStorage.setItem('active_recall_enabled', state.activeRecall);
     if (state.currentFileId) {
       loadDocument(state.currentFileId);
+    }
+  }
+
+  function toggleQuickRecall(e) {
+    state.quickRecall = e.target.checked;
+    localStorage.setItem('quick_recall_enabled', state.quickRecall);
+    toggleQuickRecallClass(state.quickRecall);
+    
+    if (state.quickRecall) {
+      renderQuickRecallDeck();
+    } else {
+      if (state.currentFileId && state.currentCategory !== 'Dashboard') {
+        loadDocument(state.currentFileId);
+      } else {
+        renderNavigation();
+        if (state.currentCategory === 'Dashboard') {
+          renderDashboardLayout();
+        } else {
+          const categoryFiles = STUDY_DATA.filter(d => d.category === state.currentCategory);
+          if (categoryFiles.length > 0) {
+            loadDocument(categoryFiles[0].id);
+          } else {
+            renderEmptyState();
+          }
+        }
+      }
+    }
+  }
+
+  function toggleQuickRecallClass(enabled) {
+    if (enabled) {
+      document.body.classList.add('quick-recall-mode');
+    } else {
+      document.body.classList.remove('quick-recall-mode');
     }
   }
 
@@ -624,6 +677,22 @@ StartLimitBurst=5`,
 
   function renderNavigation() {
     el.navMenu.innerHTML = '';
+    
+    if (state.currentCategory === 'Dashboard') {
+      el.navMenu.innerHTML = `
+        <div class="category-group">
+          <div class="category-title">Workstation Hub</div>
+          <button class="nav-item active">
+            <span><i class="fa-solid fa-chart-pie" style="margin-right:8px;"></i> Overall Metrics</span>
+          </button>
+          <div style="padding: 16px; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.5;">
+            SRE Workstation Dashboard가 활성화되어 있습니다. 전체 면접 준비 현황, 학습 연속일, 카테고리별 마스터 점수를 한눈에 점검해 볼 수 있습니다.
+          </div>
+        </div>
+      `;
+      return;
+    }
+
     const filteredData = STUDY_DATA.filter(item => {
       if (item.category !== state.currentCategory) return false;
       const titleMatches = item.title.toLowerCase().includes(state.searchQuery);
@@ -1499,6 +1568,278 @@ $ df -h /dev/sda1
     bindStatusSelector(doc.id);
   }
 
+  // 5. INTERVIEW WORKSTATION DASHBOARD RENDERER
+  function renderDashboardLayout() {
+    el.contentArea.classList.remove('wide-layout');
+    
+    const behData = STUDY_DATA.filter(d => d.category === 'Behavioral');
+    const linuxData = STUDY_DATA.filter(d => d.category === 'Linux');
+    const codingData = STUDY_DATA.filter(d => d.category === 'Coding');
+    
+    const getCatMetrics = (data) => {
+      const total = data.length;
+      if (total === 0) return { score: 0, completed: 0, total: 0 };
+      let completed = 0;
+      let reviewing = 0;
+      data.forEach(item => {
+        const status = state.statusMap[item.id] || item.status || 'Studying';
+        if (status === 'Mastered') completed++;
+        else if (status === 'Reviewing') reviewing++;
+      });
+      const score = Math.round(((completed + (reviewing * 0.5)) / total) * 100);
+      return { score, completed, total };
+    };
+
+    const behMetrics = getCatMetrics(behData);
+    const linuxMetrics = getCatMetrics(linuxData);
+    const codingMetrics = getCatMetrics(codingData);
+
+    const overallScore = Math.round((behMetrics.score * 0.20) + (linuxMetrics.score * 0.50) + (codingMetrics.score * 0.30));
+    
+    let html = `
+      <div class="item-title-section">
+        <span class="item-path">DCS SRE Operations / Cockpit</span>
+        <h1 class="item-title"><i class="fa-solid fa-gauge-high" style="color: hsl(var(--accent));"></i> Interview Workstation Dashboard</h1>
+      </div>
+
+      <div class="dashboard-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; margin-top: 24px;">
+        <!-- Left Side: Readiness Score Circle -->
+        <div class="study-card" style="margin-bottom: 0;">
+          <div class="card-tabs"><span class="tab-btn active" style="cursor:default">Overall Readiness Score</span></div>
+          <div class="card-body" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px;">
+            <div class="radial-gauge-container" style="position: relative; width: 160px; height: 160px; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle, var(--card-bg) 60%, transparent 62%); border-radius: 50%;">
+              <div class="radial-progress-bar" style="position: absolute; top:0; left:0; right:0; bottom:0; border-radius: 50%; background: conic-gradient(hsl(var(--accent)) ${overallScore}%, var(--border-color) ${overallScore}%); z-index: 1;"></div>
+              <div class="radial-inner-circle" style="position: absolute; top: 12px; left: 12px; right: 12px; bottom: 12px; border-radius: 50%; background: var(--card-bg); z-index: 2; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-color);">
+                <span style="font-family: var(--font-heading); font-size: 2.5rem; font-weight: 700; color: var(--text-primary);">${overallScore}%</span>
+              </div>
+            </div>
+            <div style="margin-top: 20px; text-align: center;">
+              <span class="meta-badge stars" style="font-size: 0.85rem;"><i class="fa-solid fa-award"></i> SRE Weight-Adjusted Readiness</span>
+              <p style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 8px; max-width: 240px; line-height: 1.4;">Linux(50%), Coding(30%), Behavioral(20%)의 가중치를 계산한 실시간 합격률 지표입니다.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Side: Category Metrics & Recommendations -->
+        <div class="study-card" style="margin-bottom: 0;">
+          <div class="card-tabs"><span class="tab-btn active" style="cursor:default">Category Breakdown & Progress</span></div>
+          <div class="card-body" style="padding: 24px;">
+            <!-- Behavioral -->
+            <div style="margin-bottom: 20px;">
+              <div style="display: flex; justify-content: space-between; font-size: 0.88rem; margin-bottom: 6px;">
+                <span style="font-weight: 500; color: var(--text-primary);"><i class="fa-solid fa-comments" style="color: #6366f1; margin-right:6px;"></i> Behavioral Interview</span>
+                <span style="font-weight: bold; color: var(--text-primary);">${behMetrics.score}% (${behMetrics.completed}/${behMetrics.total} 마스터)</span>
+              </div>
+              <div class="progress-bar-wrapper" style="height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden;">
+                <div style="height: 100%; width: ${behMetrics.score}%; background: #6366f1; border-radius: 4px; transition: width 0.3s;"></div>
+              </div>
+            </div>
+            <!-- Linux -->
+            <div style="margin-bottom: 20px;">
+              <div style="display: flex; justify-content: space-between; font-size: 0.88rem; margin-bottom: 6px;">
+                <span style="font-weight: 500; color: var(--text-primary);"><i class="fa-solid fa-terminal" style="color: #10b981; margin-right:6px;"></i> Linux Troubleshooting</span>
+                <span style="font-weight: bold; color: var(--text-primary);">${linuxMetrics.score}% (${linuxMetrics.completed}/${linuxMetrics.total} 마스터)</span>
+              </div>
+              <div class="progress-bar-wrapper" style="height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden;">
+                <div style="height: 100%; width: ${linuxMetrics.score}%; background: #10b981; border-radius: 4px; transition: width 0.3s;"></div>
+              </div>
+            </div>
+            <!-- Coding -->
+            <div style="margin-bottom: 24px;">
+              <div style="display: flex; justify-content: space-between; font-size: 0.88rem; margin-bottom: 6px;">
+                <span style="font-weight: 500; color: var(--text-primary);"><i class="fa-solid fa-code" style="color: #f59e0b; margin-right:6px;"></i> Coding Practice</span>
+                <span style="font-weight: bold; color: var(--text-primary);">${codingMetrics.score}% (${codingMetrics.completed}/${codingMetrics.total} 마스터)</span>
+              </div>
+              <div class="progress-bar-wrapper" style="height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden;">
+                <div style="height: 100%; width: ${codingMetrics.score}%; background: #f59e0b; border-radius: 4px; transition: width 0.3s;"></div>
+              </div>
+            </div>
+
+            <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 20px 0;">
+
+            <!-- Streaks & Date Countdown -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: center;">
+              <div style="background: rgba(239, 68, 68, 0.05); border: 1px dashed rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 12px;">
+                <div style="font-size: 0.78rem; text-transform: uppercase; color: #ef4444; font-weight: bold; letter-spacing: 0.5px;">ByteDance D-Day</div>
+                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">D-5 Days</div>
+              </div>
+              <div style="background: rgba(245, 158, 11, 0.05); border: 1px dashed rgba(245, 158, 11, 0.2); border-radius: 8px; padding: 12px;">
+                <div style="font-size: 0.78rem; text-transform: uppercase; color: #f59e0b; font-weight: bold; letter-spacing: 0.5px;">Study Streak</div>
+                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;"><i class="fa-solid fa-fire" style="color: #f59e0b; margin-right: 4px;"></i> 12 Days</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="study-card" style="margin-top: 24px;">
+        <div class="card-tabs"><span class="tab-btn active" style="cursor:default"><i class="fa-solid fa-graduation-cap"></i> Recommended Next Study Path (SRE 가중 추천 학습 경로)</span></div>
+        <div class="card-body" style="padding: 24px; line-height: 1.6;">
+          <h3 style="font-family: var(--font-heading); font-size:1.1rem; color: hsl(var(--accent)); margin-bottom:12px;"><i class="fa-solid fa-circle-exclamation"></i> 현재 취약 분야 집중 권장 사항</h3>
+          <p style="font-size:0.92rem; color: var(--text-primary); margin-bottom:16px;">
+            전체 진행률 분석 결과, <strong>Linux Troubleshooting (가중치 50%)</strong> 영역 중 마스터하지 못한 질문이 있습니다.
+            특히 면접 빈출 문항인 <a href="#" id="dashRecLink" style="color: hsl(var(--accent)); font-weight:bold; text-decoration:underline;">[Linux 3] 지속적인 메모리 증가 및 OOM(Out of Memory) 진단</a> 문제 학습을 마스터(Mastered) 상태로 완료하시는 것을 적극 추천드립니다.
+          </p>
+          <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+            <button class="top-tab-btn" id="dashGoLinuxBtn" style="border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 6px; background: var(--card-bg); color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-terminal"></i> 리눅스 트러블슈팅 풀이 시작</button>
+            <button class="top-tab-btn" id="dashGoRecallBtn" style="border: 1px solid hsl(var(--accent)); padding: 8px 16px; border-radius: 6px; background: rgba(var(--accent), 0.1); color: hsl(var(--accent)); cursor: pointer; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-bolt"></i> 퀵 리콜 모드로 최종 벼락치기</button>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    el.contentArea.innerHTML = html;
+    
+    const dashRecLink = document.getElementById('dashRecLink');
+    if (dashRecLink) {
+      dashRecLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        const linuxBtn = el.topNavTabs.querySelector(`[data-category="Linux"]`);
+        if (linuxBtn) linuxBtn.click();
+        setTimeout(() => loadDocument('linux-q03-memory-leak'), 50);
+      });
+    }
+    const dashGoLinuxBtn = document.getElementById('dashGoLinuxBtn');
+    if (dashGoLinuxBtn) {
+      dashGoLinuxBtn.addEventListener('click', () => {
+        const linuxBtn = el.topNavTabs.querySelector(`[data-category="Linux"]`);
+        if (linuxBtn) linuxBtn.click();
+      });
+    }
+    const dashGoRecallBtn = document.getElementById('dashGoRecallBtn');
+    if (dashGoRecallBtn) {
+      dashGoRecallBtn.addEventListener('click', () => {
+        el.quickRecallToggle.click();
+      });
+    }
+  }
+
+  // 6. QUICK RECALL FLASHCARDS SYSTEM
+  let recallIndex = 0;
+  let recallCards = [];
+  let recallIsFlipped = false;
+
+  function renderQuickRecallDeck() {
+    el.contentArea.classList.remove('wide-layout');
+    
+    recallCards = STUDY_DATA.filter(d => {
+      const status = state.statusMap[d.id] || d.status || 'Studying';
+      return status !== 'Mastered';
+    });
+    if (recallCards.length === 0) {
+      recallCards = STUDY_DATA;
+    }
+    
+    if (recallIndex >= recallCards.length) {
+      recallIndex = 0;
+    }
+    
+    const currentCard = recallCards[recallIndex];
+    const status = getStatus(currentCard.id);
+    
+    let html = `
+      <div class="item-title-section">
+        <span class="item-path">Quick Recall Session / Flashcards</span>
+        <h1 class="item-title"><i class="fa-solid fa-bolt" style="color: #f59e0b;"></i> Last-Minute Review Mode (${recallIndex + 1} / ${recallCards.length})</h1>
+      </div>
+      
+      <div class="flashcard-container" style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 400px; margin-top: 24px; gap: 24px;">
+        <div class="flashcard-element ${recallIsFlipped ? 'flipped' : ''}" id="flashcardElement" style="perspective: 1000px; width: 100%; max-width: 600px; height: 320px; cursor: pointer;">
+          <div class="flashcard-inner" style="position: relative; width: 100%; height: 100%; text-align: center; transition: transform 0.6s; transform-style: preserve-3d; transform: ${recallIsFlipped ? 'rotateY(180deg)' : 'none'};">
+            <!-- Front: Question -->
+            <div class="flashcard-front" style="position: absolute; width: 100%; height: 100%; backface-visibility: hidden; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(0,0,0,0.15);">
+              <span style="font-family: var(--font-heading); font-size: 0.8rem; text-transform: uppercase; color: hsl(var(--accent)); font-weight: bold; margin-bottom: 16px;">${currentCard.category} Interview Question</span>
+              <h2 style="font-size: 1.35rem; font-weight: 600; line-height: 1.5; color: var(--text-primary);">${getDocumentDisplayTitle(currentCard)}</h2>
+              <div style="margin-top: 32px; font-size: 0.8rem; color: var(--text-secondary);"><i class="fa-solid fa-reply"></i> Click Card or Press SPACE to reveal answer</div>
+            </div>
+            <!-- Back: Key Summary -->
+            <div class="flashcard-back" style="position: absolute; width: 100%; height: 100%; backface-visibility: hidden; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 32px; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(0,0,0,0.15); transform: rotateY(180deg); overflow-y: auto;">
+              <span style="font-family: var(--font-heading); font-size: 0.8rem; text-transform: uppercase; color: #10b981; font-weight: bold; margin-bottom: 12px;">Recommended Answer Points</span>
+              <div style="font-size: 0.95rem; text-align: left; color: var(--text-primary); max-height: 200px; overflow-y: auto; line-height: 1.6;">
+                ${convertToInterlinear(getAnswerSummary(currentCard))}
+              </div>
+              <div style="margin-top: 16px; font-size: 0.78rem; color: var(--text-secondary);">Keyboard Shortcuts: [1] Mastered [2] Reviewing [3] Studying</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Navigation & Status Selector Buttons -->
+        <div style="display: flex; gap: 16px; align-items: center; justify-content: center; flex-wrap: wrap;">
+          <button class="top-tab-btn" id="prevRecallBtn" style="border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 6px; background: var(--card-bg); color: var(--text-primary); cursor: pointer;"><i class="fa-solid fa-arrow-left"></i> Previous</button>
+          <div style="display: flex; gap: 8px;">
+            <button class="top-tab-btn" id="markMasteredBtn" style="border: 1px solid #10b981; background: ${status === 'Mastered' ? '#10b981' : 'rgba(16, 185, 129, 0.1)'}; color: ${status === 'Mastered' ? '#fff' : '#10b981'}; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.82rem;">[1] Mastered</button>
+            <button class="top-tab-btn" id="markReviewingBtn" style="border: 1px solid #f59e0b; background: ${status === 'Reviewing' ? '#f59e0b' : 'rgba(245, 158, 11, 0.1)'}; color: ${status === 'Reviewing' ? '#fff' : '#f59e0b'}; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.82rem;">[2] Reviewing</button>
+            <button class="top-tab-btn" id="markStudyingBtn" style="border: 1px solid #ef4444; background: ${status === 'Studying' ? '#ef4444' : 'rgba(239, 68, 68, 0.1)'}; color: ${status === 'Studying' ? '#fff' : '#ef4444'}; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.82rem;">[3] Studying</button>
+          </div>
+          <button class="top-tab-btn" id="nextRecallBtn" style="border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 6px; background: var(--card-bg); color: var(--text-primary); cursor: pointer;">Next <i class="fa-solid fa-arrow-right"></i></button>
+        </div>
+      </div>
+    `;
+    
+    el.contentArea.innerHTML = html;
+    
+    const cardEl = document.getElementById('flashcardElement');
+    if (cardEl) {
+      cardEl.addEventListener('click', () => {
+        recallIsFlipped = !recallIsFlipped;
+        const inner = cardEl.querySelector('.flashcard-inner');
+        if (inner) {
+          inner.style.transform = recallIsFlipped ? 'rotateY(180deg)' : 'none';
+        }
+        cardEl.classList.toggle('flipped', recallIsFlipped);
+      });
+    }
+    
+    const prevRecallBtn = document.getElementById('prevRecallBtn');
+    if (prevRecallBtn) {
+      prevRecallBtn.addEventListener('click', () => {
+        recallIsFlipped = false;
+        recallIndex = (recallIndex - 1 + recallCards.length) % recallCards.length;
+        renderQuickRecallDeck();
+      });
+    }
+    
+    const nextRecallBtn = document.getElementById('nextRecallBtn');
+    if (nextRecallBtn) {
+      nextRecallBtn.addEventListener('click', () => {
+        recallIsFlipped = false;
+        recallIndex = (recallIndex + 1) % recallCards.length;
+        renderQuickRecallDeck();
+      });
+    }
+    
+    const bindMarkBtn = (id, newStatus) => {
+      const btn = document.getElementById(id);
+      if (btn) {
+        btn.addEventListener('click', () => {
+          updateStatus(currentCard.id, newStatus);
+          renderQuickRecallDeck();
+        });
+      }
+    };
+    
+    bindMarkBtn('markMasteredBtn', 'Mastered');
+    bindMarkBtn('markReviewingBtn', 'Reviewing');
+    bindMarkBtn('markStudyingBtn', 'Studying');
+  }
+
+  function getAnswerSummary(doc) {
+    const english = doc.sections.find(s => s.title.includes("English") || s.title.includes("Answer") || s.title.includes("Solution"));
+    const korean = doc.sections.find(s => s.title.includes("Korean"));
+    
+    let engHTML = english ? english.content : '';
+    let korHTML = korean ? korean.content : '';
+    
+    if (engHTML || korHTML) {
+      return buildInterlinearHTML(engHTML, korHTML) || engHTML || korHTML;
+    }
+    
+    if (doc.sections.length > 1) {
+      return doc.sections[1].content;
+    }
+    return 'No answer content available.';
+  }
+
   // --- Sub-parsers & Annotators ---
 
   function parseFollowupCards(htmlContent) {
@@ -1701,6 +2042,34 @@ $ df -h /dev/sda1
       pre.appendChild(copyBtn);
     });
   }
+
+  // Keyboard Navigation for Quick Recall
+  document.addEventListener('keydown', (e) => {
+    if (!state.quickRecall) return;
+    
+    if (e.code === 'Space') {
+      e.preventDefault();
+      const cardEl = document.getElementById('flashcardElement');
+      if (cardEl) {
+        cardEl.click();
+      }
+    } else if (e.code === 'Digit1' || e.code === 'Numpad1') {
+      const btn = document.getElementById('markMasteredBtn');
+      if (btn) btn.click();
+    } else if (e.code === 'Digit2' || e.code === 'Numpad2') {
+      const btn = document.getElementById('markReviewingBtn');
+      if (btn) btn.click();
+    } else if (e.code === 'Digit3' || e.code === 'Numpad3') {
+      const btn = document.getElementById('markStudyingBtn');
+      if (btn) btn.click();
+    } else if (e.code === 'ArrowRight') {
+      const btn = document.getElementById('nextRecallBtn');
+      if (btn) btn.click();
+    } else if (e.code === 'ArrowLeft') {
+      const btn = document.getElementById('prevRecallBtn');
+      if (btn) btn.click();
+    }
+  });
 });
 
 
