@@ -1572,6 +1572,13 @@ $ df -h /dev/sda1
   function renderDashboardLayout() {
     el.contentArea.classList.remove('wide-layout');
     
+    // Calculate D-Day dynamically for June 23, 2026 (US time)
+    const targetDate = new Date('2026-06-23T00:00:00-04:00'); // US Eastern Time
+    const today = new Date();
+    const diffTime = targetDate - today;
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    const dDayText = diffDays > 0 ? `D-${diffDays} Days` : (diffDays === 0 ? 'D-Day' : `D+${Math.abs(diffDays)} Days`);
+
     const behData = STUDY_DATA.filter(d => d.category === 'Behavioral');
     const linuxData = STUDY_DATA.filter(d => d.category === 'Linux');
     const codingData = STUDY_DATA.filter(d => d.category === 'Coding');
@@ -1661,7 +1668,7 @@ $ df -h /dev/sda1
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: center;">
               <div style="background: rgba(239, 68, 68, 0.05); border: 1px dashed rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 12px;">
                 <div style="font-size: 0.78rem; text-transform: uppercase; color: #ef4444; font-weight: bold; letter-spacing: 0.5px;">ByteDance D-Day</div>
-                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">D-5 Days</div>
+                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">\${dDayText}</div>
               </div>
               <div style="background: rgba(245, 158, 11, 0.05); border: 1px dashed rgba(245, 158, 11, 0.2); border-radius: 8px; padding: 12px;">
                 <div style="font-size: 0.78rem; text-transform: uppercase; color: #f59e0b; font-weight: bold; letter-spacing: 0.5px;">Study Streak</div>
