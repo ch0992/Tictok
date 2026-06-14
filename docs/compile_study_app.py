@@ -92,12 +92,23 @@ def parse_markdown_file(file_path, base_dir):
     
     # Category detection
     category = "General"
-    if "Coding" in rel_path:
-        category = "Coding"
-    elif "Day01" in rel_path:
+    path_lower = rel_path.lower()
+    if "behavioral" in path_lower or "day01" in path_lower:
         category = "Behavioral"
-    elif "Day02" in rel_path:
+    elif "linux" in path_lower or "day02" in path_lower:
         category = "Linux"
+    elif "networking" in path_lower:
+        category = "Networking"
+    elif "cloud" in path_lower:
+        category = "Cloud"
+    elif "kubernetes" in path_lower:
+        category = "Kubernetes"
+    elif "gpu" in path_lower:
+        category = "GPU & AI Infrastructure"
+    elif "coding" in path_lower:
+        category = "Coding"
+    elif "system-design" in path_lower:
+        category = "System Design"
     
     # H1 Extraction
     title_match = re.search(r'^#\s+(.*)$', content, re.MULTILINE)

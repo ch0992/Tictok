@@ -575,6 +575,26 @@ StartLimitBurst=5`,
     if (id === 'linux-commands-deep-dive') {
       return 'Linux 6. ';
     }
+    if (id.startsWith('network-q')) {
+      const m = id.match(/^network-q(\d+)/);
+      return m ? `Network ${parseInt(m[1])}. ` : '';
+    }
+    if (id.startsWith('cloud-q')) {
+      const m = id.match(/^cloud-q(\d+)/);
+      return m ? `Cloud ${parseInt(m[1])}. ` : '';
+    }
+    if (id.startsWith('k8s-q')) {
+      const m = id.match(/^k8s-q(\d+)/);
+      return m ? `K8s ${parseInt(m[1])}. ` : '';
+    }
+    if (id.startsWith('gpu-q')) {
+      const m = id.match(/^gpu-q(\d+)/);
+      return m ? `GPU ${parseInt(m[1])}. ` : '';
+    }
+    if (id.startsWith('sd-q')) {
+      const m = id.match(/^sd-q(\d+)/);
+      return m ? `SysDesign ${parseInt(m[1])}. ` : '';
+    }
     if (id.startsWith('coding-day')) {
       const m = id.match(/^coding-day(\d+)/);
       return m ? `Coding ${parseInt(m[1])}. ` : '';
@@ -742,7 +762,12 @@ StartLimitBurst=5`,
     const categoryLabel = {
       "Behavioral": "Behavioral Questions",
       "Linux": "Linux Scenarios",
-      "Coding": "Coding Exercises"
+      "Networking": "Networking Scenarios",
+      "Cloud": "Cloud Engineering",
+      "Kubernetes": "Kubernetes Scenarios",
+      "GPU & AI Infrastructure": "GPU & AI Infrastructure Scenarios",
+      "Coding": "Coding Exercises",
+      "System Design": "System Design Scenarios"
     }[state.currentCategory] || "Documents";
 
     const title = document.createElement('div');
@@ -1579,10 +1604,6 @@ $ df -h /dev/sda1
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     const dDayText = diffDays > 0 ? `D-${diffDays} Days` : (diffDays === 0 ? 'D-Day' : `D+${Math.abs(diffDays)} Days`);
 
-    const behData = STUDY_DATA.filter(d => d.category === 'Behavioral');
-    const linuxData = STUDY_DATA.filter(d => d.category === 'Linux');
-    const codingData = STUDY_DATA.filter(d => d.category === 'Coding');
-    
     const getCatMetrics = (data) => {
       const total = data.length;
       if (total === 0) return { score: 0, completed: 0, total: 0 };
@@ -1597,11 +1618,43 @@ $ df -h /dev/sda1
       return { score, completed, total };
     };
 
-    const behMetrics = getCatMetrics(behData);
-    const linuxMetrics = getCatMetrics(linuxData);
-    const codingMetrics = getCatMetrics(codingData);
+    const categories = [
+      { id: 'Behavioral', label: 'Behavioral Questions', icon: 'fa-comments', color: '#6366f1' },
+      { id: 'Linux', label: 'Linux Troubleshooting', icon: 'fa-terminal', color: '#10b981' },
+      { id: 'Networking', label: 'Networking Scenarios', icon: 'fa-network-wired', color: '#0ea5e9' },
+      { id: 'Cloud', label: 'Cloud Engineering', icon: 'fa-cloud', color: '#3b82f6' },
+      { id: 'Kubernetes', label: 'Kubernetes Scenarios', icon: 'fa-cubes', color: '#8b5cf6' },
+      { id: 'GPU & AI Infrastructure', label: 'GPU & AI Infrastructure', icon: 'fa-microchip', color: '#ec4899' },
+      { id: 'Coding', label: 'Coding Practice', icon: 'fa-code', color: '#f59e0b' },
+      { id: 'System Design', label: 'System Design', icon: 'fa-sitemap', color: '#10b981' }
+    ];
 
-    const overallScore = Math.round((behMetrics.score * 0.20) + (linuxMetrics.score * 0.50) + (codingMetrics.score * 0.30));
+    let totalScoreSum = 0;
+    let activeCategoriesCount = 0;
+    let categoryHtml = '';
+
+    categories.forEach(cat => {
+      const data = STUDY_DATA.filter(d => d.category === cat.id);
+      const metrics = getCatMetrics(data);
+      if (data.length > 0) {
+        totalScoreSum += metrics.score;
+        activeCategoriesCount++;
+      }
+      
+      categoryHtml += `
+        <div style="margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.88rem; margin-bottom: 6px;">
+            <span style="font-weight: 500; color: var(--text-primary);"><i class="fa-solid ${cat.icon}" style="color: ${cat.color}; margin-right:6px; width: 16px; text-align: center;"></i> ${cat.label}</span>
+            <span style="font-weight: bold; color: var(--text-primary);">${metrics.score}% (${metrics.completed}/${metrics.total} 마스터)</span>
+          </div>
+          <div class="progress-bar-wrapper" style="height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden;">
+            <div style="height: 100%; width: ${metrics.score}%; background: ${cat.color}; border-radius: 4px; transition: width 0.3s;"></div>
+          </div>
+        </div>
+      `;
+    });
+
+    const overallScore = activeCategoriesCount > 0 ? Math.round(totalScoreSum / activeCategoriesCount) : 0;
     
     let html = `
       <div class="item-title-section">
@@ -1622,7 +1675,7 @@ $ df -h /dev/sda1
             </div>
             <div style="margin-top: 20px; text-align: center;">
               <span class="meta-badge stars" style="font-size: 0.85rem;"><i class="fa-solid fa-award"></i> SRE Weight-Adjusted Readiness</span>
-              <p style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 8px; max-width: 240px; line-height: 1.4;">Linux(50%), Coding(30%), Behavioral(20%)의 가중치를 계산한 실시간 합격률 지표입니다.</p>
+              <p style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 8px; max-width: 240px; line-height: 1.4;">등록된 모든 카테고리별 마스터 점수의 종합 평균 지표입니다.</p>
             </div>
           </div>
         </div>
@@ -1630,37 +1683,8 @@ $ df -h /dev/sda1
         <!-- Right Side: Category Metrics & Recommendations -->
         <div class="study-card" style="margin-bottom: 0;">
           <div class="card-tabs"><span class="tab-btn active" style="cursor:default">Category Breakdown & Progress</span></div>
-          <div class="card-body" style="padding: 24px;">
-            <!-- Behavioral -->
-            <div style="margin-bottom: 20px;">
-              <div style="display: flex; justify-content: space-between; font-size: 0.88rem; margin-bottom: 6px;">
-                <span style="font-weight: 500; color: var(--text-primary);"><i class="fa-solid fa-comments" style="color: #6366f1; margin-right:6px;"></i> Behavioral Interview</span>
-                <span style="font-weight: bold; color: var(--text-primary);">${behMetrics.score}% (${behMetrics.completed}/${behMetrics.total} 마스터)</span>
-              </div>
-              <div class="progress-bar-wrapper" style="height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden;">
-                <div style="height: 100%; width: ${behMetrics.score}%; background: #6366f1; border-radius: 4px; transition: width 0.3s;"></div>
-              </div>
-            </div>
-            <!-- Linux -->
-            <div style="margin-bottom: 20px;">
-              <div style="display: flex; justify-content: space-between; font-size: 0.88rem; margin-bottom: 6px;">
-                <span style="font-weight: 500; color: var(--text-primary);"><i class="fa-solid fa-terminal" style="color: #10b981; margin-right:6px;"></i> Linux Troubleshooting</span>
-                <span style="font-weight: bold; color: var(--text-primary);">${linuxMetrics.score}% (${linuxMetrics.completed}/${linuxMetrics.total} 마스터)</span>
-              </div>
-              <div class="progress-bar-wrapper" style="height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden;">
-                <div style="height: 100%; width: ${linuxMetrics.score}%; background: #10b981; border-radius: 4px; transition: width 0.3s;"></div>
-              </div>
-            </div>
-            <!-- Coding -->
-            <div style="margin-bottom: 24px;">
-              <div style="display: flex; justify-content: space-between; font-size: 0.88rem; margin-bottom: 6px;">
-                <span style="font-weight: 500; color: var(--text-primary);"><i class="fa-solid fa-code" style="color: #f59e0b; margin-right:6px;"></i> Coding Practice</span>
-                <span style="font-weight: bold; color: var(--text-primary);">${codingMetrics.score}% (${codingMetrics.completed}/${codingMetrics.total} 마스터)</span>
-              </div>
-              <div class="progress-bar-wrapper" style="height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden;">
-                <div style="height: 100%; width: ${codingMetrics.score}%; background: #f59e0b; border-radius: 4px; transition: width 0.3s;"></div>
-              </div>
-            </div>
+          <div class="card-body" style="padding: 24px; max-height: 320px; overflow-y: auto;">
+            \${categoryHtml}
 
             <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 20px 0;">
 
