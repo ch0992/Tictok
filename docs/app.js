@@ -411,6 +411,106 @@ x-frame-options: SAMEORIGIN`,
     }
   };
 
+  const latencySimData = {
+    packet_loss: {
+      activeStep: 1,
+      console: `$ ping -c 10 142.250.196.142
+PING 142.250.196.142 (142.250.196.142): 56 data bytes
+64 bytes from 142.250.196.142: icmp_seq=0 ttl=56 time=12.4 ms
+Request timeout for icmp_seq=1
+64 bytes from 142.250.196.142: icmp_seq=2 ttl=56 time=12.2 ms
+Request timeout for icmp_seq=3
+64 bytes from 142.250.196.142: icmp_seq=4 ttl=56 time=12.5 ms
+Request timeout for icmp_seq=5
+64 bytes from 142.250.196.142: icmp_seq=6 ttl=56 time=12.3 ms
+Request timeout for icmp_seq=7
+64 bytes from 142.250.196.142: icmp_seq=8 ttl=56 time=12.6 ms
+Request timeout for icmp_seq=9
+
+--- 142.250.196.142 ping statistics ---
+10 packets transmitted, 5 packets received, <span class="console-highlight">50.0% packet loss<span class="console-tooltip">Packet Loss (패킷 유실률): 송신한 10개의 패킷 중 5개가 소실되었음을 보여줍니다. WAN 구간이나 스위치 버퍼 오버플로우로 인해 심각한 전송 장애가 발생하고 있습니다.</span></span>, time 9014ms
+rtt min/avg/max/mdev = 12.235/12.411/12.612/0.135 ms
+
+$ tcpdump -i eth0 -n -vv 'tcp[tcpflags] & (tcp-syn|tcp-fin) == 0'
+20:04:18.102941 IP 192.168.1.10.49152 &gt; 142.250.196.142.443: Flags [.], seq 1001:2461, ack 5001, win 64240, options [nop,nop,TS val 1002941 ecr 2003482]
+20:04:18.303112 IP 192.168.1.10.49152 &gt; 142.250.196.142.443: <span class="console-highlight correct-flag">Flags [P.], seq 1001:2461, ack 5001, retrans 1<span class="console-tooltip">TCP Retransmission: 송신 측에서 타이머(RTO)가 만료될 때까지 ACK가 오지 않아 seq 1001 패킷을 재전송(retrans 1)하는 상태입니다. 이 재전송 루프로 인해 RTT 지연이 극대화됩니다.</span></span>, win 64240, options [nop,nop,TS val 1003141 ecr 2003482]
+20:04:18.312401 IP 142.250.196.142.443 &gt; 192.168.1.10.49152: Flags [.], ack 2461, win 65535, options [nop,nop,TS val 2003601 ecr 1003141, <span class="console-highlight">sack 1 {1001:2461}<span class="console-tooltip">SACK (Selective Acknowledgment): 수신측이 일부 소실된 시퀀스를 제외하고 정상 수신된 데이터 구간(1001~2461)을 특정하여 알려주는 옵션으로, 불필요한 전체 재전송을 막고 유실된 패킷만 선택 전송하도록 돕습니다.</span></span>]`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation" style="color: #ef4444; margin-right: 6px;"></i><strong>네트워크 링크 상에서 패킷 드롭이 발생하는 시나리오입니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>현상 매핑:</strong> <code>ping</code> 결과에서 극심한 패킷 드롭(50%)이 식별되며, <code>tcpdump</code>로 캡처한 TCP 패킷에서 동일한 시퀀스 범위의 <code>Retransmission</code>(재전송) 로그가 빈번하게 발견됩니다.</li>
+          <li style="margin-bottom: 6px;"><strong>지연 발생 기전:</strong> 패킷이 유실되면 수신측이 정상 ACK를 보내지 못하므로 송신자는 RTO(재전송 타임아웃) 시간 동안 통신을 중단하고 대기했다가 다시 데이터를 보내 전체 통신 속도가 수 초씩 멈추는 지연이 누적됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 대응 방안:</strong> 스위치 인터페이스의 드롭 카운터(CRC 에러 등)를 분석하고, 물리 케이블/SFP 지빅 불량 검사 및 네트워크 장비 버퍼 포화(Congestion) 상태를 모니터링하여 병목 스위치 포트를 보정합니다.</li>
+        </ul>
+      `
+    },
+    db_lock: {
+      activeStep: 2,
+      console: `$ psql -c "SELECT pid, age(clock_timestamp(), query_start), state, query FROM pg_stat_activity WHERE state != 'idle';"
+  pid  |       age       |   state   |             query             
+-------+-----------------+-----------+------------------------------------------------------------
+ 28192 | 00:00:15.394121 | <span class="console-highlight">active<span class="console-tooltip">Active: 해당 커넥션에서 쿼리가 현재 실행 중이며 리소스를 점유하고 있음을 의미합니다. 처리 시간이 수초~수십초 이상 지속되면 정상 동작이 아닙니다.</span></span>    | UPDATE users SET balance = balance - 100 WHERE id = 1042;
+ 28241 | 00:00:15.019482 | <span class="console-highlight correct-flag">active<span class="console-tooltip">Active (Waiting): state상으로는 active이나 내부적으로 테이블 락(Exclusive Lock)을 획득하기 위해 blocked된 상태입니다.</span></span>    | UPDATE users SET balance = balance + 100 WHERE id = 1042;
+
+$ psql -c "SELECT blocked_locks.pid AS blocked_pid, blocking_locks.pid AS blocking_pid, blocked_activity.query AS blocked_statement FROM pg_catalog.pg_locks blocked_locks JOIN pg_catalog.pg_locks blocking_locks ON blocking_locks.locktype = blocked_locks.locktype AND blocking_locks.database IS NOT DISTINCT FROM blocked_locks.database AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation JOIN pg_catalog.pg_stat_activity blocked_activity ON blocked_activity.pid = blocked_locks.pid JOIN pg_catalog.pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid WHERE NOT blocked_locks.granted;"
+ blocked_pid | blocking_pid |                     blocked_statement                     
+-------------+--------------+-----------------------------------------------------------
+       28241 |        28192 | UPDATE users SET balance = balance + 100 WHERE id = 1042;
+(1 row) <span class="console-highlight">Lock Contention Detected<span class="console-tooltip">Lock Contention (락 경합): 선행 트랜잭션(28192)이 완료되지 않은 상태에서 동일한 레코드에 후행 트랜잭션(28241)이 쓰기를 시도하면서 대기가 걸렸습니다.</span></span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation" style="color: #f59e0b; margin-right: 6px;"></i><strong>데이터베이스 트랜잭션 Lock으로 인한 애플리케이션 행(Hang) 시나리오입니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>현상 매핑:</strong> PostgreSQL 내 <code>pg_stat_activity</code> 확인 결과 특정 쿼리의 실행 시간(Age)이 15초 이상 유지되고 있으며, 다른 세션이 특정 레코드에 대해 exclusive lock 대기 상태로 대기열을 채우고 있습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>지연 발생 기전:</strong> 웹 애플리케이션 서버(WAS)가 DB 쿼리를 요청했으나 DB 단에서 행 수준 락 대기에 잠겨 응답을 주지 못하므로, WAS의 커넥션 풀(Connection Pool) 스레드가 풀 상태로 대기하다가 차례로 고갈되어 전체 클라이언트 응답이 타임아웃됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 대응 방안:</strong> 차단 원인을 유발한 DB 세션(PID 28192)을 강제 종료(<code>pg_terminate_backend(pid)</code>)하고, 소스코드 레벨에서 트랜잭션 유지 시간(Transaction lifetime)을 줄이며, 필요한 인덱스를 생성하여 데이터 조회 속도를 단축시킵니다.</li>
+        </ul>
+      `
+    },
+    storage: {
+      activeStep: 3,
+      console: `$ iostat -xz 1 3
+Device:         rrqm/s   wrqm/s     r/s     w/s    rkB/s    wkB/s aqu-sz  await  svctm  %util
+sdb               0.00     4.00    2.00  450.00     8.00 45000.00   8.50  <span class="console-highlight">85.42<span class="console-tooltip">await: I/O 요청이 디스크 대기열에서 대기하고 실제로 디바이스가 처리 완료하기까지 소요된 총 평균 시간(ms)입니다. 10ms 이상이면 디스크 대스크 병목으로 간주합니다.</span></span>   2.00  <span class="console-highlight correct-flag">100.00<span class="console-tooltip">%util: 디바이스가 입출력 요청을 처리하는 데 활성화되었던 시간 비율입니다. 100%에 도달했다는 것은 디바이스의 물리적 IOPS 한계에 도달해 디스크가 완전히 포화 상태임을 증명합니다.</span></span>
+
+$ df -h
+Filesystem            Size  Used Avail Use% Mounted on
+/dev/sda1              40G   24G   16G  60% /
+10.0.1.5:/data_share  1.0T  850G  150G  85% <span class="console-highlight">/mnt/shared_nfs<span class="console-tooltip">NFS Network Mount: 네트워크 공유 디렉토리 마운트 포트입니다. NFS 서버 측 디스크 과부하 및 대역폭 포화 시 I/O 시스템 콜을 대기시키는 주범이 됩니다.</span></span>
+
+$ tail -n 5 /var/log/syslog
+Jun 14 01:12:04 web-srv-01 kernel: [31940.12] <span class="console-highlight">nfs: server 10.0.1.5 not responding, still trying<span class="console-tooltip">NFS Server Not Responding: NFS 스토리지 공유 서버가 응답하지 않아 커널이 I/O 쓰기 동작을 완료하지 못하고 행이 걸려 있는 커널 수준의 경고 메시지입니다.</span></span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation" style="color: #ef4444; margin-right: 6px;"></i><strong>스토리지 성능 저하(IOPS 포화 및 NFS 지연) 시나리오입니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>현상 매핑:</strong> <code>iostat</code> 분석 시 디스크 디바이스(sdb)의 <code>%util</code>이 100%에 고정되어 있고, 입출력 대기 시간인 <code>await</code>이 85ms를 넘는 비정상적인 수치를 가리킵니다. Syslog에는 NFS 마운트 지연 에러가 로깅되고 있습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>지연 발생 기전:</strong> 애플리케이션 코드가 파일 로그 기록이나 정적 자원 업로드를 시도할 때, 디스크 I/O가 완료될 때까지 커널에서 <code>Uninterruptible Sleep (D state)</code> 상태로 대기(Block)되어 웹 응답 레이턴시가 폭발적으로 누적됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 대응 방안:</strong> NFS 서버 스토리지 디바이스를 고성능 SSD(IOPS 프로비저닝 볼륨)로 업그레이드하고, 애플리케이션의 로깅 방식을 비동기(Asynchronous logging / Queue) 방식으로 교체하여 I/O 블로킹을 우회합니다.</li>
+        </ul>
+      `
+    },
+    rdma_fallback: {
+      activeStep: 4,
+      console: `$ cat /sys/class/infiniband/mlx5_0/ports/1/state
+4: ACTIVE
+
+$ cat /sys/class/infiniband/mlx5_0/ports/1/tc/1/pfc_enable
+0 (disabled) <span class="console-highlight">-- [WARNING] PFC is disabled!<span class="console-tooltip">PFC (Priority Flow Control): 이더넷 상에서 무손실(Lossless) 전송을 보장하도록 특정 우선순위 클래스 트래픽에 멈춤 프레임을 보내 패킷 드롭을 방지하는 기술로, 이더넷 기반 RDMA(RoCE) 인프라 구축의 필수 요구조건입니다.</span></span>
+
+$ cat /var/log/syslog | grep -i "roce"
+Jun 14 01:14:02 gpu-node-01 kernel: [mlx5_core] <span class="console-highlight correct-flag">RoCE PFC verification failed: Lossless path status check FAILED<span class="console-tooltip">PFC 검증 실패: 스위치와 호스트 간 PFC 불일치로 무손실 데이터 경로가 파괴되었음을 커널 드라이버가 감지하고 관련 RDMA 가상 링크 수립을 거부했습니다.</span></span>
+Jun 14 01:14:02 gpu-node-01 kernel: [mlx5_core] Warning: Falling back to standard TCP socket transport for GPU peer data.
+Jun 14 01:14:03 gpu-node-01 app_gpu: Peer link latency degraded. Baseline 0.12ms (RDMA) -> 4.80ms (TCP socket). Performance dropped by 40x.`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation" style="color: #8b5cf6; margin-right: 6px;"></i><strong>PFC 설정 비활성화로 인해 RDMA 통신이 커널 TCP로 강제 Fallback된 시나리오입니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>현상 매핑:</strong> InfiniBand/RoCE 호스트 포트 상태는 ACTIVE나, <code>pfc_enable</code> 스위치 측과 호스트 포트 측의 튜닝이 비활성화(0)되어 있으며 커널 로그에 RoCE PFC verification 실패 및 TCP socket Fallback 알림이 떠 있습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>지연 발생 기전:</strong> 무손실 전송이 불가능해지자 GPU 간 대용량 텐서(Tensor) 전송 시 메모리 복사 및 컨텍스트 스위칭이 없는 zero-copy RDMA 대신, CPU 개입과 복사 연산이 수반되는 커널 TCP 소켓을 경유해 통신 지연이 40배 폭증하고 분산 학습 스피드가 처참히 감소합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 대응 방안:</strong> 네트워크 스위치 및 호스트 네트워크 인터페이스 카드(NIC) 양단에 PFC(Priority Flow Control) 및 ECN(Explicit Congestion Notification) 혼잡 제어 설정을 활성화하여 Lossless 이더넷 환경을 견고히 확립합니다.</li>
+        </ul>
+      `
+    }
+  };
+
   const OVERVIEW_DATA = {
     // --- Linux Troubleshooting Scenarios ---
     "linux-q01-server-slow": {
@@ -593,6 +693,22 @@ x-frame-options: SAMEORIGIN`,
         "dig +trace를 활용한 도메인 위임 및 네임서버 조회 경로 추적",
         "openssl s_client를 사용한 TLS 협상 상태 및 인증서 신뢰 체인 유효성 분석",
         "curl -v 헤더 분석 및 브라우저 CRP(Critical Rendering Path) 단계별 로딩 최적화"
+      ]
+    },
+    "network-q03-high-latency": {
+      title: "사용자 서비스 지연 및 다차원 인프라 병목 격리",
+      icon: "fa-solid fa-gauge-simple-high",
+      summary: "애플리케이션 레이어부터 분산 GPU 클러스터의 RDMA 전송망까지 발생 가능한 다차원 지연(Latency) 현상을 정량 메트릭과 로그 분석을 통해 구간별로 격리하고 원인을 해결합니다.",
+      questions: [
+        "지연 발생 시 네트워크 회선의 유실률인지 애플리케이션의 연산 병목인지 진단하는 기준은?",
+        "PostgreSQL DB 트랜잭션 락 경합 시 lock 대기 쿼리와 blocking 쿼리를 매핑하는 방법은?",
+        "AI 분산 GPU 클러스터에서 RoCE RDMA 통신이 일반 커널 TCP로 Fallback되어 지연이 생기는 원인은?"
+      ],
+      skills: [
+        "ping, traceroute, tcpdump 및 SACK 옵션을 통한 WAN 패킷 소실 및 TCP 재전송 분석",
+        "pg_stat_activity 및 pg_locks 조인을 활용한 DB 데드락 및 트랜잭션 exclusive lock 경합 식별",
+        "iostat -xz 및 df -h를 활용한 디스크 IOPS 포화도 및 NFS 파일 시스템 마운트 블로킹 분석",
+        "RoCE PFC/ECN 혼잡 제어 및 sysfs 설정을 조율한 초고속 RDMA 무손실 전송 상태 교정"
       ]
     }
   };
@@ -1979,6 +2095,67 @@ $ df -h /dev/sda1
           </div>
         </div>
       `;
+    } else if (doc.id === 'network-q03-high-latency') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-gauge-simple-high" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          Distributed System Latency Diagnostic Sandbox (분산 시스템 지연 진단 샌드박스)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          <!-- Visual diagram row -->
+          <div class="dns-nodes-diagram" id="latencyNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 160px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; transition: all 0.3s ease;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="latencyStepGrid" style="grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-scenario="packet_loss" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: hsl(var(--accent)); text-transform: uppercase;">Scenario 1</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-network-wired" style="margin-right:4px;"></i>패킷 유실</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Packet Loss & Retransmit</div>
+            </div>
+            <div class="cpu-dial-card" data-scenario="db_lock" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Scenario 2</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-database" style="margin-right:4px;"></i>DB 락 경합</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Database Lock Contention</div>
+            </div>
+            <div class="cpu-dial-card" data-scenario="storage" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Scenario 3</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-hard-drive" style="margin-right:4px;"></i>스토리 병목</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Storage IOPS Saturation</div>
+            </div>
+            <div class="cpu-dial-card" data-scenario="rdma_fallback" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Scenario 4</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-server" style="margin-right:4px;"></i>RDMA 폴백</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">GPU Cluster TCP Fallback</div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="latencyTerminalTitle"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i>Diagnostic Terminal Output</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 200px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="latencyConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">장애 구간 격리 분석 & RCA 대책</span></div>
+                <div class="card-body" id="latencyAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     // Accordion: Interviewer's Intent
@@ -2380,6 +2557,160 @@ $ df -h /dev/sda1
 
       // Initialize simulator with first step
       updateDnsSimulator('dns');
+    }
+
+    // BIND SIMULATOR LOGIC FOR network-q03-high-latency
+    if (doc.id === 'network-q03-high-latency') {
+      const latencyStepCards = document.querySelectorAll('#latencyStepGrid .cpu-dial-card');
+      const latencyConsoleOutput = document.getElementById('latencyConsoleOutput');
+      const latencyAnalysisText = document.getElementById('latencyAnalysisText');
+      const latencyNodesDiagram = document.getElementById('latencyNodesDiagram');
+      const latencyTerminalTitle = document.getElementById('latencyTerminalTitle');
+
+      function updateLatencyDiagram(scenarioKey) {
+        let diagramHTML = '';
+        if (scenarioKey === 'packet_loss') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 12px;">
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">User Client</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 192.168.1.10</div>
+              </div>
+              <div style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div style="width: 100%; height: 4px; background: #10b981; border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #10b981;"></div>
+                </div>
+              </div>
+              <div class="network-node" style="background: rgba(245, 158, 11, 0.05); border: 2px solid #f59e0b; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(245, 158, 11, 0.15);">
+                <div style="font-size: 1.1rem; color: #f59e0b; margin-bottom: 4px;"><i class="fa-solid fa-code-branch"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Load Balancer</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 10.0.0.1</div>
+              </div>
+              <div style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div style="width: 100%; height: 4px; background: #ef4444; border-radius: 2px; position: relative;">
+                  <div style="position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 0.6rem; font-weight: bold; color: #ef4444; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid #ef4444; white-space: nowrap; animation: pulse 1s infinite;">
+                    <i class="fa-solid fa-triangle-exclamation"></i> Drop 50%
+                  </div>
+                </div>
+              </div>
+              <div class="network-node" style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(239, 68, 68, 0.15);">
+                <div style="font-size: 1.1rem; color: #ef4444; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">App Server</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">TCP Retransmit</div>
+              </div>
+            </div>
+          `;
+        } else if (scenarioKey === 'db_lock') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: center; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 24px;">
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">App Server</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">Pool: Active Wait</div>
+              </div>
+              <div style="width: 80px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center;">
+                <div style="width: 100%; height: 2px; border-top: 2px dotted #f59e0b; position: relative;">
+                  <div style="position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.6rem; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 1px 5px; border-radius: 3px; border: 1px solid #f59e0b; white-space: nowrap;">
+                    Waiting Lock...
+                  </div>
+                </div>
+              </div>
+              <div class="network-node" style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 12px; padding: 12px; width: 160px; text-align: center; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.25); position: relative;">
+                <div style="position: absolute; top: -12px; right: -12px; background: #ef4444; color: #ffffff; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; border: 2px solid #1e293b; animation: pulse 1.2s infinite;"><i class="fa-solid fa-lock"></i></div>
+                <div style="font-size: 1.3rem; color: #ef4444; margin-bottom: 4px;"><i class="fa-solid fa-database"></i></div>
+                <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-primary);">PostgreSQL DB</div>
+                <div style="font-size: 0.65rem; color: #ef4444; font-weight: bold; margin-top: 2px;">Exclusive Lock (PID 28192)</div>
+              </div>
+            </div>
+          `;
+        } else if (scenarioKey === 'storage') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: center; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 24px;">
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">App Server</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">Blocked on NFS I/O</div>
+              </div>
+              <div style="width: 80px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center;">
+                <div style="width: 100%; height: 2px; border-top: 2px dashed #ef4444; position: relative;">
+                  <div style="position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.6rem; font-weight: bold; color: #ef4444; background: #1e293b; padding: 1px 5px; border-radius: 3px; border: 1px solid #ef4444; white-space: nowrap;">
+                    await 85.4ms
+                  </div>
+                </div>
+              </div>
+              <div class="network-node" style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 12px; padding: 12px; width: 160px; text-align: center; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.25); position: relative;">
+                <div style="position: absolute; top: -12px; right: -12px; background: #ef4444; color: #ffffff; border-radius: 4px; padding: 2px 6px; font-size: 0.6rem; font-weight: bold; border: 1.5px solid #1e293b; text-transform: uppercase;">100% util</div>
+                <div style="font-size: 1.3rem; color: #ef4444; margin-bottom: 4px;"><i class="fa-solid fa-hard-drive"></i></div>
+                <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-primary);">NFS Storage Share</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 2px;">/mnt/shared_nfs</div>
+              </div>
+            </div>
+          `;
+        } else if (scenarioKey === 'rdma_fallback') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 12px;">
+              <div class="network-node" style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(139, 92, 246, 0.15);">
+                <div style="font-size: 1.1rem; color: #8b5cf6; margin-bottom: 4px;"><i class="fa-solid fa-microchip"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">GPU Node 1</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">RoCE NIC (mlx5_0)</div>
+              </div>
+              <div style="flex-grow: 1; margin: 0 8px; position: relative; height: 45px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px;">
+                <div style="width: 100%; height: 2px; border-top: 2px dashed #ef4444; position: relative; margin-bottom: 12px;">
+                  <span style="position: absolute; top: -14px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #ef4444; background: #1e293b; padding: 0 4px; border: 1.5px solid #ef4444; border-radius: 2px; font-weight: bold;">RDMA Blocked (No PFC)</span>
+                </div>
+                <div style="width: 100%; height: 2px; background: #f59e0b; position: relative;">
+                  <span style="position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #f59e0b; background: #1e293b; padding: 0 4px; border: 1.5px solid #f59e0b; border-radius: 2px; font-weight: bold; white-space: nowrap;">TCP Fallback (40x Slower)</span>
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #f59e0b; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #f59e0b;"></div>
+                </div>
+              </div>
+              <div class="network-node" style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(139, 92, 246, 0.15);">
+                <div style="font-size: 1.1rem; color: #8b5cf6; margin-bottom: 4px;"><i class="fa-solid fa-microchip"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">GPU Node 2</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 10.0.0.12</div>
+              </div>
+            </div>
+          `;
+        }
+        return diagramHTML;
+      }
+
+      function updateLatencySimulator(scenarioKey) {
+        const scenarioData = latencySimData[scenarioKey];
+        if (!scenarioData) return;
+
+        // Update console title
+        if (latencyTerminalTitle) {
+          if (scenarioKey === 'packet_loss') latencyTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>ping & tcpdump Packet Loss Diagnostic';
+          if (scenarioKey === 'db_lock') latencyTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>PostgreSQL Lock Contention Query';
+          if (scenarioKey === 'storage') latencyTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>iostat & syslog storage bottleneck';
+          if (scenarioKey === 'rdma_fallback') latencyTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>RoCE/PFC Verification & syslog';
+        }
+
+        // 1. Update diagram
+        latencyNodesDiagram.innerHTML = updateLatencyDiagram(scenarioKey);
+
+        // 2. Update logs and descriptions
+        latencyConsoleOutput.innerHTML = scenarioData.console;
+        latencyAnalysisText.innerHTML = scenarioData.analysis;
+      }
+
+      latencyStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          latencyStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+          
+          const scenarioKey = card.dataset.scenario;
+          updateLatencySimulator(scenarioKey);
+        });
+      });
+
+      // Initialize simulator with first scenario
+      updateLatencySimulator('packet_loss');
     }
 
     bindStatusSelector(doc.id);
