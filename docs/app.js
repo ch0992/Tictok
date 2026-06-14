@@ -233,6 +233,74 @@ StartLimitBurst=5`,
     }
   };
 
+  const tcpHandshakeData = {
+    syn: {
+      clientState: 'SYN_SENT',
+      serverState: 'LISTEN',
+      arrow: 'client-to-server',
+      packetDesc: 'SYN',
+      activeStep: 1,
+      console: `20:04:18.102941 IP 192.168.1.10.49152 &gt; 10.0.0.5.80: <span class="console-highlight correct-flag">Flags [S]<span class="console-tooltip">S = SYN (Synchronize). 클라이언트가 서버에 새로운 가상 연결 세션 수립을 요청함을 뜻하는 제어 플래그입니다.</span></span>, <span class="console-highlight">seq 1000<span class="console-tooltip">초기 시퀀스 번호(Initial Sequence Number): 패킷의 정렬 상태 및 수신 확인용으로 양측이 임의로 생성하는 32비트 고유 일련번호의 시작점입니다.</span></span>, <span class="console-highlight">win 64240<span class="console-tooltip">윈도우 크기(Window Size): 수신측에서 승인(ACK)을 보내기 전까지 한번에 받을 수 있는 메모리 버퍼의 최대 바이트 용량입니다.</span></span>, options [mss 1460,sackOK,TS val 1002941 ecr 0]`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #0ea5e9; margin-right: 6px;"></i><strong>클라이언트가 SYN 패킷을 전송합니다. (Step 1)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>동작 메커니즘:</strong> Client는 무작위 초기 시퀀스 번호(ISN: 1000)를 결정하고 <code>SYN</code> 플래그를 ON하여 전송합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>소켓 상태:</strong> 클라이언트는 패킷을 보냄과 동시에 <code>CLOSED</code>에서 <code>SYN_SENT</code> 상태로 대기하며, 서버는 <code>LISTEN</code> 상태에서 패킷을 감지합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅 Point:</strong> 이 단계에서 무응답 타임아웃이 나면 <strong>방화벽(Security Group, Network ACL)</strong> 정책이나 서버 포트 리스닝 여부를 가장 먼저 확인해야 합니다.</li>
+        </ul>
+      `
+    },
+    synack: {
+      clientState: 'SYN_SENT',
+      serverState: 'SYN_RCVD',
+      arrow: 'server-to-client',
+      packetDesc: 'SYN-ACK',
+      activeStep: 2,
+      console: `20:04:18.103482 IP 10.0.0.5.80 &gt; 192.168.1.10.49152: <span class="console-highlight correct-flag">Flags [S.]<span class="console-tooltip">S. = SYN-ACK. 클라이언트의 접속 요청을 승인(ACK)하고, 서버측 시퀀스 번호도 동기화(SYN)하겠다는 다중 플래그입니다.</span></span>, <span class="console-highlight">seq 4000<span class="console-tooltip">서버측 초기 시퀀스 번호(Server ISN): 서버가 자신의 데이터 수신 흐름 정렬을 위해 생성한 고유 시작 시퀀스 번호입니다.</span></span>, <span class="console-highlight">ack 1001<span class="console-tooltip">승인 번호(Ack Number): 클라이언트의 시퀀(1000) 패킷을 완벽히 수신했음을 나타내며, 다음으로 받길 원하는 1001번 시퀀스를 가리킵니다.</span></span>, win 65535, options [mss 1460,sackOK,TS val 2003482 ecr 1002941]`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #10b981; margin-right: 6px;"></i><strong>서버가 SYN-ACK 패킷으로 답장합니다. (Step 2)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>동작 메커니즘:</strong> Server는 클라이언트 시퀀스에 1을 더한 <code>ack=1001</code>과 서버 자신의 초기 시퀀스 번호(<code>seq=4000</code>)가 합쳐진 패킷을 보냅니다.</li>
+          <li style="margin-bottom: 6px;"><strong>소켓 상태:</strong> 서버는 연결 요청을 메모리에 적재하며 <code>SYN_RCVD</code> 상태로 대기합니다. 클라이언트는 여전히 <code>SYN_SENT</code>입니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅 Point:</strong> 서버 소켓이 <code>SYN_RCVD</code>(또는 SYN_RECV) 상태로 과점유되어 있다면 <strong>SYN Flooding</strong> 공격일 가능성이 매우 높습니다. <code>tcp_syncookies = 1</code> 설정과 백로그 큐 확장이 필수 조치입니다.</li>
+        </ul>
+      `
+    },
+    ack: {
+      clientState: 'ESTABLISHED',
+      serverState: 'SYN_RCVD',
+      arrow: 'client-to-server',
+      packetDesc: 'ACK',
+      activeStep: 3,
+      console: `20:04:18.103910 IP 192.168.1.10.49152 &gt; 10.0.0.5.80: <span class="console-highlight correct-flag">Flags [.]<span class="console-tooltip">. = ACK 플래그를 지칭합니다. SYN 등의 다른 제어 플래그 없이 순수 수신 완료 응답만을 전송할 때 tcpdump에선 점(.)으로 표기됩니다.</span></span>, <span class="console-highlight">ack 4001<span class="console-tooltip">서버 시퀀스(4000)를 성공적으로 수신하였음을 증명하며, 다음 패킷인 4001번 데이터를 수신할 준비가 되었음을 의미합니다.</span></span>, win 64240, options [nop,nop,TS val 1003910 ecr 2003482]`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #f59e0b; margin-right: 6px;"></i><strong>클라이언트가 마지막 ACK 패킷을 보냅니다. (Step 3)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>동작 메커니즘:</strong> Client는 서버의 SYN-ACK 수신 후, 서버 시퀀스 4000에 1을 더한 <code>ack=4001</code>을 설정하여 확인 패킷을 최종 회신합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>소켓 상태:</strong> 클라이언트는 이 패킷을 발송하는 즉시 <code>ESTABLISHED</code> 상태로 전입하고, 서버는 이 패킷을 수령해야 <code>ESTABLISHED</code>가 됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅 Point:</strong> 이 패킷 유실 시 <strong>Half-Open Connection</strong> 상태가 생기며 서버는 SYN-ACK 재전송 루프를 돕니다. 방화벽의 아웃바운드 필터나 회선의 패킷 드롭 여부를 봐야 합니다.</li>
+        </ul>
+      `
+    },
+    established: {
+      clientState: 'ESTABLISHED',
+      serverState: 'ESTABLISHED',
+      arrow: 'bidirectional',
+      packetDesc: 'ESTABLISHED (HTTP GET)',
+      activeStep: 4,
+      console: `20:04:18.104250 IP 192.168.1.10.49152 &gt; 10.0.0.5.80: Flags [P.], seq 1001:1081, ack 4001, win 64240: <span class="console-highlight correct-flag">HTTP GET /index.html<span class="console-tooltip">실제 애플리케이션 데이터(HTTP Request)가 3-Way Handshake 완료 직후 전송되는 시뮬레이션 로그입니다.</span></span>
+20:04:18.104621 IP 10.0.0.5.80 &gt; 192.168.1.10.49152: Flags [.], ack 1081, win 65535 (HTTP Response ACK)`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-check" style="color: #10b981; margin-right: 6px;"></i><strong>연결 수립이 완료되어 양방향 데이터 통신을 개시합니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>동작 메커니즘:</strong> 세션이 최종적으로 성립되었으므로 3계층/4계층 채널 세팅을 완료하고 HTTP GET 등의 Application Layer 실제 데이터 트래픽을 즉시 교환합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>소켓 상태:</strong> 통신 양단 모두 <code>ESTABLISHED</code> 상태를 단단히 유지합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅 Point:</strong> 커넥션 수립은 정상이나 데이터 통신에 실패(예: HTTP 504 Gateway Timeout)하는 경우에는 네트워크 레벨보다는 WAS/DB 병목, Web Server 스레드 풀 고갈 장애일 가능성이 매우 높으므로 애플리케이션 분석으로 빠르게 넘어가야 합니다.</li>
+        </ul>
+      `
+    }
+  };
+
   const OVERVIEW_DATA = {
     // --- Linux Troubleshooting Scenarios ---
     "linux-q01-server-slow": {
@@ -385,6 +453,21 @@ StartLimitBurst=5`,
         "파일 I/O, 데이터 파싱, Counter, defaultdict, heapq 등 SRE 필수 Python 기본 모듈 완벽 적응",
         "현실적인 디스크/메모리 하드웨어 제약 상황(예: 대용량 로그)에서의 솔루션 최적화 연습",
         "문제 조건 정의, 에지 케이스 분석, 예외 처리 설계 등을 논리적으로 면접관에게 설명하는 면접 기법"
+      ]
+    },
+    "network-q01-tcp-handshake": {
+      title: "TCP 3-Way Handshake 기본 메커니즘 및 장애 조치",
+      icon: "fa-solid fa-network-wired",
+      summary: "네트워크 세션을 수립할 때 사용하는 TCP 3-way handshake의 동작 원리와 발생할 수 있는 주요 패킷 유실 상황 및 SRE 관점의 문제 해결 방안을 검증합니다.",
+      questions: [
+        "왜 TCP 핸드쉐이크는 2단계나 4단계가 아닌 3단계여야 하는가?",
+        "SYN Flooding 공격의 원리와 이를 완화하기 위한 Linux 커널 설정은?",
+        "마지막 ACK 패킷이 유실되었을 때 클라이언트와 서버의 상태 차이는?"
+      ],
+      skills: [
+        "tcpdump를 활용한 실시간 TCP 핸드쉐이크 패킷(SYN, SYN-ACK, ACK) 캡처 및 필터링",
+        "ss -tan 및 netstat을 통한 TCP 소켓 연결 상태(SYN_SENT, SYN_RECV, ESTABLISHED) 모니터링",
+        "sysctl 커널 파라미터(tcp_syncookies, tcp_max_syn_backlog) 튜닝을 통한 네트워크 보안강화"
       ]
     }
   };
@@ -828,6 +911,8 @@ StartLimitBurst=5`,
       renderBehavioralLayout(doc);
     } else if (doc.category === "Linux" && doc.sections.length > 2) {
       renderLinuxLayout(doc);
+    } else if (doc.category === "Networking" && doc.sections.length > 2) {
+      renderNetworkingLayout(doc);
     } else if (doc.category === "Coding" && doc.id !== 'coding_preparation_master_plan') {
       renderCodingLayout(doc);
     } else {
@@ -1568,6 +1653,355 @@ $ df -h /dev/sda1
           localStorage.setItem('study_app_checkbox_map', JSON.stringify(state.checkboxMap));
         });
       });
+    }
+
+    bindStatusSelector(doc.id);
+  }
+
+  // 3.5 NETWORKING INTERVIEW QUESTION RENDERER (TCP Handshake flow simulator, SRE insights, tooltips)
+  function renderNetworkingLayout(doc) {
+    el.contentArea.classList.add('wide-layout');
+    const currentStatus = getStatus(doc.id);
+
+    // Extract key sections
+    const intent = doc.sections.find(s => s.title.includes("Intent"));
+    const english = doc.sections.find(s => s.title.includes("English") || s.title.includes("Answer"));
+    const korean = doc.sections.find(s => s.title.includes("Korean"));
+    const followups = doc.sections.find(s => s.title.includes("Follow-up"));
+    const notes = doc.sections.find(s => s.title.includes("Notes"));
+    const concepts = doc.sections.find(s => s.title.includes("Concepts"));
+    const troubleshooting = doc.sections.find(s => s.title.includes("Troubleshooting"));
+    const commands = doc.sections.find(s => s.title.includes("Commands"));
+
+    let html = buildHeaderHTML(doc, currentStatus);
+
+    // Render Interview Question if it exists
+    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase().includes("interview question"));
+    if (interviewQuestion) {
+      html += `
+        <div class="question-card" style="background: var(--card-bg); border-left: 4px solid hsl(var(--accent)); padding: 24px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); border: 1px solid var(--border-color); border-left-width: 4px;">
+          <div style="font-family: var(--font-heading); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: hsl(var(--accent)); margin-bottom: 12px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+            <i class="fa-solid fa-circle-question" style="font-size: 1rem;"></i> Interview Question (실제 질문)
+          </div>
+          <div class="question-text" style="font-size: 1.15rem; font-weight: 500; line-height: 1.6; color: var(--text-primary);">
+            ${interviewQuestion.content}
+          </div>
+        </div>
+      `;
+    }
+
+    if (OVERVIEW_DATA[doc.id]) {
+      html += buildOverviewCard(doc.id);
+    }
+
+    // Interactive Visualizer for network-q01-tcp-handshake
+    if (doc.id === 'network-q01-tcp-handshake') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-network-wired" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          TCP 3-Way Handshake Interactive Flow Simulator (TCP 3-Way 핸드쉐이크 시뮬레이터)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          <!-- Visual diagram row -->
+          <div class="network-nodes-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; position: relative; padding: 10px 0;">
+            
+            <!-- Client Node -->
+            <div class="network-node client" id="tcpClientNode" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 16px; width: 180px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15); transition: all 0.3s ease;">
+              <div style="font-size: 1.5rem; color: #0ea5e9; margin-bottom: 8px;"><i class="fa-solid fa-laptop"></i></div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 4px; color: var(--text-primary);">Client (Browser)</div>
+              <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); line-height: 1.4;">
+                IP: 192.168.1.10<br>Port: 49152
+              </div>
+              <div id="tcpClientState" class="tcp-state-badge" style="display: inline-block; margin-top: 10px; padding: 4px 8px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; background: #334155; color: #cbd5e1; font-family: var(--font-mono);">CLOSED</div>
+            </div>
+            
+            <!-- Connection Lane -->
+            <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 24px; position: relative; height: 50px; display: flex; align-items: center; justify-content: center;">
+              <div class="packet-lane-line" id="tcpPacketLane" style="width: 100%; height: 4px; background: #334155; border-radius: 2px; position: relative; transition: all 0.3s ease;">
+                <!-- Animated packet dot -->
+                <div class="animated-packet-dot" id="animatedPacketDot" style="width: 12px; height: 12px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); opacity: 0; box-shadow: 0 0 10px #10b981; transition: none;"></div>
+                <!-- Direction indicator arrow -->
+                <div class="packet-direction-arrow" id="packetDirectionArrow" style="position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.75rem; font-weight: bold; color: #cbd5e1; background: #1e293b; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border-color); display: none;">
+                  SYN <i class="fa-solid fa-arrow-right"></i>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Server Node -->
+            <div class="network-node server" id="tcpServerNode" style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 12px; padding: 16px; width: 180px; text-align: center; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.15); transition: all 0.3s ease;">
+              <div style="font-size: 1.5rem; color: #10b981; margin-bottom: 8px;"><i class="fa-solid fa-server"></i></div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 4px; color: var(--text-primary);">Server (Nginx)</div>
+              <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); line-height: 1.4;">
+                IP: 10.0.0.5<br>Port: 80
+              </div>
+              <div id="tcpServerState" class="tcp-state-badge" style="display: inline-block; margin-top: 10px; padding: 4px 8px; border-radius: 20px; font-size: 0.75rem; font-weight: bold; background: #334155; color: #cbd5e1; font-family: var(--font-mono);">LISTEN</div>
+            </div>
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="tcpStepGrid" style="grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="syn" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: hsl(var(--accent)); text-transform: uppercase;">Step 1</div>
+              <div style="font-weight: 700; font-size: 1.1rem; margin: 4px 0 2px 0;">SYN</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Client Connection Request</div>
+            </div>
+            <div class="cpu-dial-card" data-step="synack" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Step 2</div>
+              <div style="font-weight: 700; font-size: 1.1rem; margin: 4px 0 2px 0;">SYN-ACK</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Server Response & Sync</div>
+            </div>
+            <div class="cpu-dial-card" data-step="ack" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Step 3</div>
+              <div style="font-weight: 700; font-size: 1.1rem; margin: 4px 0 2px 0;">ACK</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Client Acknowledgment</div>
+            </div>
+            <div class="cpu-dial-card" data-step="established" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Step 4</div>
+              <div style="font-weight: 700; font-size: 1.1rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-circle-check" style="color: #10b981; font-size:0.95rem; margin-right:4px;"></i>ESTABLISHED</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Bidirectional Data Session</div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="tcpTerminalTitle"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i>tcpdump Packet Capture Console</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 180px; padding: 16px; position:relative; overflow: visible;">
+                  <div style="font-family: var(--font-mono); font-size: 0.75rem; color: #64748b; margin-bottom: 8px;"># Capture Interface: eth0 (IP 192.168.1.10)</div>
+                  <pre><code id="tcpConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">단계별 분석 & SRE 장애 포인트</span></div>
+                <div class="card-body" id="tcpAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Accordion: Interviewer's Intent
+    if (intent) {
+      html += buildAccordion("Interviewer's Intent (면접관의 질문 의도)", intent.content);
+    }
+
+    // Render Answer split tab card
+    if (english || korean) {
+      html += `
+        <div class="study-card">
+          <div class="card-tabs">
+            <button class="tab-btn active" id="netTabEng">Recommended English Answer</button>
+            <button class="tab-btn" id="netTabKor">Korean Summary</button>
+          </div>
+          <div class="card-body">
+            <div class="tab-content active" id="netContentEng">
+              ${wrapActiveRecall(english ? english.content : '')}
+            </div>
+            <div class="tab-content" id="netContentKor">
+              ${buildInterlinearHTML(english ? english.content : '', korean ? korean.content : '')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Accordion: Concepts / Why Is It Needed? / Troubleshooting
+    let prepMaterials = '';
+    if (doc.sections.find(s => s.title.includes("Why"))) {
+      const whySec = doc.sections.find(s => s.title.includes("Why"));
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 16px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${whySec.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(whySec.content)}</div>`;
+    }
+    if (concepts) {
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${concepts.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(concepts.content)}</div>`;
+    }
+    if (troubleshooting) {
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${troubleshooting.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(troubleshooting.content)}</div>`;
+    }
+    if (doc.sections.find(s => s.title.includes("Production"))) {
+      const prodSec = doc.sections.find(s => s.title.includes("Production"));
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${prodSec.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(prodSec.content)}</div>`;
+    }
+
+    // Render other unrendered sections in background knowledge accordion
+    const renderedKeys = ['intent', 'english', 'answer', 'korean', 'why', 'concepts', 'troubleshooting', 'production', 'follow-up', 'notes', 'commands', 'status', 'interview question'];
+    const unrendered = doc.sections.filter(s => {
+      const titleLower = s.title.toLowerCase();
+      if (renderedKeys.some(k => titleLower.includes(k))) return false;
+      if (doc.sections.length > 0 && s.title === doc.sections[0].title) return false;
+      return true;
+    });
+
+    unrendered.forEach(sec => {
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${sec.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(sec.content)}</div>`;
+    });
+
+    if (prepMaterials) {
+      html += buildAccordion("TCP Protocol & Troubleshooting Deep Dive (네트워크 핵심 지식 및 장애 대응)", prepMaterials);
+    }
+
+    // Interactive Follow-up Question Flip Cards
+    if (followups) {
+      html += `<h2 style="font-family: var(--font-heading); margin-top:28px; font-size:1.40rem;"><i class="fa-solid fa-graduation-cap" style="color:hsl(var(--accent)); margin-right:8px;"></i> Interactive Follow-up Practice (꼬리 질문 연습)</h2>`;
+      html += parseFollowupCards(followups.content);
+    }
+
+    // Commands Section
+    if (commands) {
+      html += `
+        <div class="study-card" style="margin-top: 24px;">
+          <div class="card-tabs"><span class="tab-btn active" style="cursor:default"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i> Useful Linux Networking Commands</span></div>
+          <div class="card-body">
+            ${convertToInterlinear(commands.content)}
+          </div>
+        </div>
+      `;
+    }
+
+    // Personal Notes
+    if (notes) {
+      html += buildAccordion("Personal Notes & Study Guide", notes.content);
+    }
+
+    el.contentArea.innerHTML = html;
+
+    // Tabs listener for Recommended English Answer & Korean Summary
+    const tEng = document.getElementById('netTabEng');
+    const tKor = document.getElementById('netTabKor');
+    const cEng = document.getElementById('netContentEng');
+    const cKor = document.getElementById('netContentKor');
+
+    if (tEng && tKor) {
+      tEng.addEventListener('click', () => {
+        tEng.classList.add('active');
+        tKor.classList.remove('active');
+        cEng.classList.add('active');
+        cKor.classList.remove('active');
+      });
+      tKor.addEventListener('click', () => {
+        tKor.classList.add('active');
+        tEng.classList.remove('active');
+        cKor.classList.add('active');
+        cEng.classList.remove('active');
+      });
+    }
+
+    // Flip card listeners
+    document.querySelectorAll('.flip-card').forEach(card => {
+      card.addEventListener('click', () => {
+        card.classList.toggle('flipped');
+      });
+    });
+
+    // BIND SIMULATOR LOGIC FOR network-q01-tcp-handshake
+    if (doc.id === 'network-q01-tcp-handshake') {
+      const stepCards = document.querySelectorAll('#tcpStepGrid .cpu-dial-card');
+      const clientState = document.getElementById('tcpClientState');
+      const serverState = document.getElementById('tcpServerState');
+      const consoleOutput = document.getElementById('tcpConsoleOutput');
+      const analysisText = document.getElementById('tcpAnalysisText');
+      const packetDot = document.getElementById('animatedPacketDot');
+      const directionArrow = document.getElementById('packetDirectionArrow');
+      const clientNode = document.getElementById('tcpClientNode');
+      const serverNode = document.getElementById('tcpServerNode');
+      const laneLine = document.getElementById('tcpPacketLane');
+
+      function updateSimulator(stepKey) {
+        const stepData = tcpHandshakeData[stepKey];
+        if (!stepData) return;
+
+        // 1. Update states
+        clientState.textContent = stepData.clientState;
+        serverState.textContent = stepData.serverState;
+
+        // Apply visual highlights to nodes
+        clientNode.style.transform = 'scale(1.0)';
+        serverNode.style.transform = 'scale(1.0)';
+        clientNode.style.boxShadow = '0 4px 10px rgba(14, 165, 233, 0.15)';
+        serverNode.style.boxShadow = '0 4px 10px rgba(16, 185, 129, 0.15)';
+
+        if (stepData.clientState === 'ESTABLISHED') {
+          clientState.style.background = '#10b981';
+          clientState.style.color = '#ffffff';
+        } else if (stepData.clientState === 'SYN_SENT') {
+          clientState.style.background = '#f59e0b';
+          clientState.style.color = '#ffffff';
+          clientNode.style.transform = 'scale(1.03)';
+          clientNode.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.3)';
+        } else {
+          clientState.style.background = '#334155';
+          clientState.style.color = '#cbd5e1';
+        }
+
+        if (stepData.serverState === 'ESTABLISHED') {
+          serverState.style.background = '#10b981';
+          serverState.style.color = '#ffffff';
+        } else if (stepData.serverState === 'SYN_RCVD') {
+          serverState.style.background = '#f59e0b';
+          serverState.style.color = '#ffffff';
+          serverNode.style.transform = 'scale(1.03)';
+          serverNode.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.3)';
+        } else {
+          serverState.style.background = '#334155';
+          serverState.style.color = '#cbd5e1';
+        }
+
+        // 2. Update logs and descriptions
+        consoleOutput.innerHTML = stepData.console;
+        analysisText.innerHTML = stepData.analysis;
+
+        // 3. Animate packet
+        // Reset classes
+        packetDot.className = 'animated-packet-dot';
+        packetDot.style.opacity = '1';
+        directionArrow.style.display = 'block';
+
+        if (stepData.arrow === 'client-to-server') {
+          packetDot.classList.add('to-server');
+          directionArrow.innerHTML = `${stepData.packetDesc} <i class="fa-solid fa-arrow-right"></i>`;
+          laneLine.style.background = 'linear-gradient(90deg, #0ea5e9, #334155)';
+        } else if (stepData.arrow === 'server-to-client') {
+          packetDot.classList.add('to-client');
+          directionArrow.innerHTML = `<i class="fa-solid fa-arrow-left"></i> ${stepData.packetDesc}`;
+          laneLine.style.background = 'linear-gradient(270deg, #10b981, #334155)';
+        } else if (stepData.arrow === 'bidirectional') {
+          packetDot.classList.add('established-flow');
+          directionArrow.innerHTML = `<i class="fa-solid fa-arrow-left-right"></i> ${stepData.packetDesc}`;
+          laneLine.style.background = '#10b981';
+          laneLine.style.boxShadow = '0 0 10px rgba(16, 185, 129, 0.5)';
+        }
+      }
+
+      stepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          stepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+          
+          const stepKey = card.dataset.step;
+          updateSimulator(stepKey);
+        });
+      });
+
+      // Initialize simulator with first step
+      updateSimulator('syn');
     }
 
     bindStatusSelector(doc.id);
