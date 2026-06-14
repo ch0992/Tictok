@@ -296,6 +296,8 @@ StartLimitBurst=5`,
           <li style="margin-bottom: 6px;"><strong>동작 메커니즘:</strong> 세션이 최종적으로 성립되었으므로 3계층/4계층 채널 세팅을 완료하고 HTTP GET 등의 Application Layer 실제 데이터 트래픽을 즉시 교환합니다.</li>
           <li style="margin-bottom: 6px;"><strong>소켓 상태:</strong> 통신 양단 모두 <code>ESTABLISHED</code> 상태를 단단히 유지합니다.</li>
           <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅 Point:</strong> 커넥션 수립은 정상이나 데이터 통신에 실패(예: HTTP 504 Gateway Timeout)하는 경우에는 네트워크 레벨보다는 WAS/DB 병목, Web Server 스레드 풀 고갈 장애일 가능성이 매우 높으므로 애플리케이션 분석으로 빠르게 넘어가야 합니다.</li>
+        </ul>
+      `
     }
   };
 
@@ -576,6 +578,7 @@ x-frame-options: SAMEORIGIN`,
         "tcpdump를 활용한 실시간 TCP 핸드쉐이크 패킷(SYN, SYN-ACK, ACK) 캡처 및 필터링",
         "ss -tan 및 netstat을 통한 TCP 소켓 연결 상태(SYN_SENT, SYN_RECV, ESTABLISHED) 모니터링",
         "sysctl 커널 파라미터(tcp_syncookies, tcp_max_syn_backlog) 튜닝을 통한 네트워크 보안강화"
+      ]
     },
     "network-q02-dns-resolution": {
       title: "도메인 접속 시 웹 통신 전 과정 흐름 및 장애 격리",
@@ -2190,8 +2193,6 @@ $ df -h /dev/sda1
 
       // Initialize simulator with first step
       updateSimulator('syn');
-    }
-
     }
 
     // BIND SIMULATOR LOGIC FOR network-q02-dns-resolution
