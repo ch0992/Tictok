@@ -93,7 +93,9 @@ def parse_markdown_file(file_path, base_dir):
     # Category detection
     category = "General"
     path_lower = rel_path.lower()
-    if "behavioral" in path_lower or "day01" in path_lower:
+    if "coding" in path_lower:
+        category = "Coding"
+    elif "behavioral" in path_lower or "day01" in path_lower:
         category = "Behavioral"
     elif "linux" in path_lower or "day02" in path_lower:
         category = "Linux"
@@ -105,8 +107,6 @@ def parse_markdown_file(file_path, base_dir):
         category = "Kubernetes"
     elif "gpu" in path_lower:
         category = "GPU & AI Infrastructure"
-    elif "coding" in path_lower:
-        category = "Coding"
     elif "system-design" in path_lower:
         category = "System Design"
     

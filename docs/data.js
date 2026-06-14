@@ -1551,7 +1551,7 @@ const STUDY_DATA = [
   {
     "id": "coding-day01-top3-ip",
     "title": "Coding Day 01 - Problem 01 <br> 코딩 1일차 - 1번 문제",
-    "category": "Behavioral",
+    "category": "Coding",
     "importance": null,
     "frequency": null,
     "probability": null,
@@ -1587,7 +1587,7 @@ const STUDY_DATA = [
   {
     "id": "coding-day02-error-count",
     "title": "Coding Day 02 - Problem 02 <br> 코딩 2일차 - 2번 문제",
-    "category": "Behavioral",
+    "category": "Coding",
     "importance": null,
     "frequency": null,
     "probability": null,
@@ -1623,7 +1623,7 @@ const STUDY_DATA = [
   {
     "id": "coding-day03-json-metrics",
     "title": "Coding Day 03 - Problem 03 <br> 코딩 3일차 - 3번 문제",
-    "category": "Behavioral",
+    "category": "Coding",
     "importance": null,
     "frequency": null,
     "probability": null,
