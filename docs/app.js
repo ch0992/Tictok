@@ -2413,7 +2413,7 @@ $ df -h /dev/sda1
           `;
         } else if (stepKey === 'tcp') {
           diagramHTML = `
-            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
               <!-- Client Node -->
               <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
                 <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
@@ -2441,7 +2441,7 @@ $ df -h /dev/sda1
           `;
         } else if (stepKey === 'tls') {
           diagramHTML = `
-            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
               <!-- Client Node -->
               <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
                 <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
@@ -2450,9 +2450,9 @@ $ df -h /dev/sda1
               </div>
               
               <!-- SSL Glow Lane -->
-              <div style="flex-grow: 1; margin: 0 16px; text-align: center; position: relative;">
-                <div style="width: 100%; height: 6px; background: linear-gradient(90deg, #3b82f6, #8b5cf6, #10b981); border-radius: 3px; box-shadow: 0 0 10px rgba(139, 92, 246, 0.6); display: flex; align-items: center; justify-content: center; position: relative;">
-                  <div style="position: absolute; top: -12px; font-size: 1.1rem; color: #f59e0b; filter: drop-shadow(0 0 4px rgba(245,158,11,0.6));"><i class="fa-solid fa-shield-halved"></i></div>
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 16px; text-align: center; position: relative;">
+                <div class="packet-lane-line" style="width: 100%; height: 6px; background: linear-gradient(90deg, #3b82f6, #8b5cf6, #10b981); border-radius: 3px; box-shadow: 0 0 10px rgba(139, 92, 246, 0.6); display: flex; align-items: center; justify-content: center; position: relative;">
+                  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.1rem; color: #f59e0b; filter: drop-shadow(0 0 4px rgba(245,158,11,0.6));"><i class="fa-solid fa-shield-halved"></i></div>
                 </div>
                 <div style="font-size: 0.6rem; color: #cbd5e1; font-weight: bold; margin-top: 8px;">TLS 1.3 Securing Session</div>
               </div>
@@ -2467,7 +2467,7 @@ $ df -h /dev/sda1
           `;
         } else if (stepKey === 'http') {
           diagramHTML = `
-            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
               <!-- Client Node -->
               <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
                 <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
@@ -2571,14 +2571,14 @@ $ df -h /dev/sda1
         let diagramHTML = '';
         if (scenarioKey === 'packet_loss') {
           diagramHTML = `
-            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 12px;">
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 12px;">
               <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
                 <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
                 <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">User Client</div>
                 <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 192.168.1.10</div>
               </div>
-              <div style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
-                <div style="width: 100%; height: 4px; background: #10b981; border-radius: 2px; position: relative;">
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #10b981; border-radius: 2px; position: relative;">
                   <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #10b981;"></div>
                 </div>
               </div>
@@ -2587,9 +2587,9 @@ $ df -h /dev/sda1
                 <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Load Balancer</div>
                 <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 10.0.0.1</div>
               </div>
-              <div style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
-                <div style="width: 100%; height: 4px; background: #ef4444; border-radius: 2px; position: relative;">
-                  <div style="position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 0.6rem; font-weight: bold; color: #ef4444; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid #ef4444; white-space: nowrap; animation: pulse 1s infinite;">
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #ef4444; border-radius: 2px; position: relative; animation: pulse 1s infinite;">
+                  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.6rem; font-weight: bold; color: #ef4444; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid #ef4444; white-space: nowrap;">
                     <i class="fa-solid fa-triangle-exclamation"></i> Drop 50%
                   </div>
                 </div>
@@ -2603,15 +2603,15 @@ $ df -h /dev/sda1
           `;
         } else if (scenarioKey === 'db_lock') {
           diagramHTML = `
-            <div style="width: 100%; display: flex; justify-content: center; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 24px;">
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: center; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 24px;">
               <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
                 <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
                 <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">App Server</div>
                 <div style="font-size: 0.65rem; color: var(--text-secondary);">Pool: Active Wait</div>
               </div>
-              <div style="width: 80px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center;">
-                <div style="width: 100%; height: 2px; border-top: 2px dotted #f59e0b; position: relative;">
-                  <div style="position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.6rem; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 1px 5px; border-radius: 3px; border: 1px solid #f59e0b; white-space: nowrap;">
+              <div class="packet-lane-wrapper" style="width: 80px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center;">
+                <div class="packet-lane-line dotted-lane" style="width: 100%; height: 2px; position: relative;">
+                  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.6rem; font-weight: bold; color: #f59e0b; background: #1e293b; padding: 1px 5px; border-radius: 3px; border: 1px solid #f59e0b; white-space: nowrap;">
                     Waiting Lock...
                   </div>
                 </div>
@@ -2626,15 +2626,15 @@ $ df -h /dev/sda1
           `;
         } else if (scenarioKey === 'storage') {
           diagramHTML = `
-            <div style="width: 100%; display: flex; justify-content: center; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 24px;">
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: center; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 24px;">
               <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
                 <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
                 <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">App Server</div>
                 <div style="font-size: 0.65rem; color: var(--text-secondary);">Blocked on NFS I/O</div>
               </div>
-              <div style="width: 80px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center;">
-                <div style="width: 100%; height: 2px; border-top: 2px dashed #ef4444; position: relative;">
-                  <div style="position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.6rem; font-weight: bold; color: #ef4444; background: #1e293b; padding: 1px 5px; border-radius: 3px; border: 1px solid #ef4444; white-space: nowrap;">
+              <div class="packet-lane-wrapper" style="width: 80px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center;">
+                <div class="packet-lane-line dashed-lane" style="width: 100%; height: 2px; position: relative;">
+                  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.6rem; font-weight: bold; color: #ef4444; background: #1e293b; padding: 1px 5px; border-radius: 3px; border: 1px solid #ef4444; white-space: nowrap;">
                     await 85.4ms
                   </div>
                 </div>
@@ -2649,18 +2649,20 @@ $ df -h /dev/sda1
           `;
         } else if (scenarioKey === 'rdma_fallback') {
           diagramHTML = `
-            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 12px;">
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; flex-wrap: wrap; gap: 12px;">
               <div class="network-node" style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(139, 92, 246, 0.15);">
                 <div style="font-size: 1.1rem; color: #8b5cf6; margin-bottom: 4px;"><i class="fa-solid fa-microchip"></i></div>
                 <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">GPU Node 1</div>
                 <div style="font-size: 0.65rem; color: var(--text-secondary);">RoCE NIC (mlx5_0)</div>
               </div>
-              <div style="flex-grow: 1; margin: 0 8px; position: relative; height: 45px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px;">
-                <div style="width: 100%; height: 2px; border-top: 2px dashed #ef4444; position: relative; margin-bottom: 12px;">
-                  <span style="position: absolute; top: -14px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #ef4444; background: #1e293b; padding: 0 4px; border: 1.5px solid #ef4444; border-radius: 2px; font-weight: bold;">RDMA Blocked (No PFC)</span>
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 45px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px;">
+                <div class="packet-lane-line dashed-lane" style="width: 100%; height: 2px; position: relative; margin-bottom: 12px;">
+                  <span style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.55rem; color: #ef4444; background: #1e293b; padding: 0 4px; border: 1.5px solid #ef4444; border-radius: 2px; font-weight: bold; white-space: nowrap;">RDMA Blocked (No PFC)</span>
                 </div>
-                <div style="width: 100%; height: 2px; background: #f59e0b; position: relative;">
-                  <span style="position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #f59e0b; background: #1e293b; padding: 0 4px; border: 1.5px solid #f59e0b; border-radius: 2px; font-weight: bold; white-space: nowrap;">TCP Fallback (40x Slower)</span>
+              </div>
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 45px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px;">
+                <div class="packet-lane-line" style="width: 100%; height: 2px; background: #f59e0b; position: relative;">
+                  <span style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.55rem; color: #f59e0b; background: #1e293b; padding: 0 4px; border: 1.5px solid #f59e0b; border-radius: 2px; font-weight: bold; white-space: nowrap;">TCP Fallback (40x Slower)</span>
                   <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #f59e0b; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #f59e0b;"></div>
                 </div>
               </div>
