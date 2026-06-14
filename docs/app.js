@@ -1154,7 +1154,7 @@ StartLimitBurst=5`,
             <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
               <div class="terminal-tab-bar"><span class="terminal-tab active" id="memoryTerminalTitle">Simulated Memory Diagnostic Command</span></div>
               <div class="terminal-screen" style="min-height: 220px;">
-                <pre><code id="memoryConsoleOutput" style="color:#e2e8f0;">\${memoryLeakData.growth.console}</code></pre>
+                <pre><code id="memoryConsoleOutput" style="color:#e2e8f0;">${memoryLeakData.growth.console}</code></pre>
               </div>
             </div>
           </div>
@@ -1162,7 +1162,7 @@ StartLimitBurst=5`,
             <div class="study-card" style="margin-bottom:0; height:100%;">
               <div class="card-tabs"><span class="tab-btn active" style="cursor:default">메모리 상태 분석 & 트러블슈팅</span></div>
               <div class="card-body" id="memoryAnalysisText" style="line-height:1.6; font-size:0.9rem;">
-                \${memoryLeakData.growth.analysis}
+                ${memoryLeakData.growth.analysis}
               </div>
             </div>
           </div>
@@ -1260,7 +1260,7 @@ $ df -h /dev/sda1
             <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
               <div class="terminal-tab-bar"><span class="terminal-tab active" id="crashTerminalTitle">Crash Investigation Step Output</span></div>
               <div class="terminal-screen" style="min-height: 220px;">
-                <pre><code id="crashConsoleOutput" style="color:#e2e8f0;">\${processCrashData.status.console}</code></pre>
+                <pre><code id="crashConsoleOutput" style="color:#e2e8f0;">${processCrashData.status.console}</code></pre>
               </div>
             </div>
           </div>
@@ -1268,7 +1268,7 @@ $ df -h /dev/sda1
             <div class="study-card" style="margin-bottom:0; height:100%;">
               <div class="card-tabs"><span class="tab-btn active" style="cursor:default">크래시 원인 및 복구 분석</span></div>
               <div class="card-body" id="crashAnalysisText" style="line-height:1.6; font-size:0.9rem;">
-                \${processCrashData.status.analysis}
+                ${processCrashData.status.analysis}
               </div>
             </div>
           </div>
@@ -1684,7 +1684,7 @@ $ df -h /dev/sda1
         <div class="study-card" style="margin-bottom: 0;">
           <div class="card-tabs"><span class="tab-btn active" style="cursor:default">Category Breakdown & Progress</span></div>
           <div class="card-body" style="padding: 24px; max-height: 320px; overflow-y: auto;">
-            \${categoryHtml}
+            ${categoryHtml}
 
             <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 20px 0;">
 
@@ -1692,7 +1692,7 @@ $ df -h /dev/sda1
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: center;">
               <div style="background: rgba(239, 68, 68, 0.05); border: 1px dashed rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 12px;">
                 <div style="font-size: 0.78rem; text-transform: uppercase; color: #ef4444; font-weight: bold; letter-spacing: 0.5px;">ByteDance D-Day</div>
-                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">\${dDayText}</div>
+                <div style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin-top: 4px;">${dDayText}</div>
               </div>
               <div style="background: rgba(245, 158, 11, 0.05); border: 1px dashed rgba(245, 158, 11, 0.2); border-radius: 8px; padding: 12px;">
                 <div style="font-size: 0.78rem; text-transform: uppercase; color: #f59e0b; font-weight: bold; letter-spacing: 0.5px;">Study Streak</div>
