@@ -409,6 +409,118 @@ const STUDY_DATA = [
     ]
   },
   {
+    "id": "network-q01-tcp-handshake",
+    "title": "Networking Interview Question 01",
+    "category": "Networking",
+    "importance": "★★★★★",
+    "frequency": "★★★★★",
+    "probability": null,
+    "status": "Studying",
+    "path": "networking/network-q01-tcp-handshake.md",
+    "sections": [
+      {
+        "title": "Explain the TCP 3-Way Handshake",
+        "content": "<h3>Difficulty</h3>\n\n<p>Medium</p>\n\n<h3>Importance</h3>\n\n<p>★★★★★</p>\n\n<h3>Frequency</h3>\n\n<p>★★★★★</p>\n\n<hr>"
+      },
+      {
+        "title": "Quick Recall",
+        "content": "<p>TCP establishes a reliable connection before data transfer. <br> TCP는 데이터를 전송하기 전에 신뢰할 수 있는 연결을 수립합니다.</p>\n\n<p>1. SYN<br>2. SYN-ACK<br>3. ACK</p>\n\n<p>Purpose: <br> 목적:</p>\n\n<ul>\n<li>Synchronize sequence numbers <br> - 시퀀스 번호의 동기화</li>\n<li>Verify both sides can communicate <br> - 양방향 통신 가능 여부 검증</li>\n<li>Establish a reliable connection <br> - 신뢰할 수 있는 세션 채널 수립</li>\n</ul>\n\n<hr>"
+      },
+      {
+        "title": "Interview Question",
+        "content": "<p>Can you explain how the TCP 3-way handshake works? <br> TCP 3-way handshake의 작동 원리를 설명해 주세요.</p>\n\n<p>Why is it needed? <br> 왜 이 동작이 꼭 필요합니까?</p>\n\n<hr>"
+      },
+      {
+        "title": "Interviewer's Intent",
+        "content": "<p>The interviewer wants to evaluate: <br> 면접관은 다음 사항들을 평가하고자 합니다:</p>\n\n<ul>\n<li>TCP fundamentals <br> - TCP 프로토콜의 핵심 동작 메커니즘</li>\n<li>Network troubleshooting knowledge <br> - 네트워크 트러블슈팅에 필요한 인프라 분석 지식</li>\n<li>Understanding of reliable communication <br> - 신뢰성 있는 통신 채널 수립에 대한 이해도</li>\n<li>Protocol-level thinking <br> - 프로토콜 및 패킷 수준에서의 논리적 분석 사고 방식</li>\n</ul>\n\n<p>The interviewer is often less interested in memorization and more interested in understanding why the handshake exists. <br> 면접관은 단순히 단계를 외우는 것보다 3-Way Handshake가 왜 존재해야만 하는지에 대한 깊은 이해를 확인하고 싶어 합니다.</p>\n\n<hr>"
+      },
+      {
+        "title": "Recommended Answer (English)",
+        "content": "<p>TCP is a connection-oriented protocol, which means a connection must be established before data can be exchanged. <br> TCP는 연결 지향형 프로토콜이므로 실제 데이터를 주고받기 전에 먼저 신뢰할 수 있는 연결을 수립해야 합니다.</p>\n\n<p>The TCP 3-way handshake is the process used to establish that connection. <br> TCP 3-way handshake는 그러한 가상 연결을 맺기 위해 사용하는 프로토콜 수립 프로세스입니다.</p>\n\n<p>First, the client sends a SYN packet to the server indicating that it wants to initiate a connection. <br> 첫째, 클라이언트는 서버에 연결 요청을 알리기 위해 SYN(동기화) 패킷을 전송합니다.</p>\n\n<p>Second, the server responds with a SYN-ACK packet acknowledging the client's request and providing its own sequence number. <br> 둘째, 서버는 클라이언트의 요청을 확인(ACK)하고, 자신의 연결 설정을 위한 시퀀스 번호와 함께 SYN-ACK 패킷으로 응답합니다.</p>\n\n<p>Finally, the client sends an ACK packet back to the server. <br> 마지막으로, 클라이언트는 서버의 응답을 확인했다는 ACK 패킷을 다시 서버로 전송합니다.</p>\n\n<p>At that point, both sides have synchronized sequence numbers and the connection is established. <br> 이 시점이 되면 양단 간의 초기 시퀀스 번호(Sequence Number) 동기가 완료되고 세션 연결이 공식 수립됩니다.</p>\n\n<p>The purpose of the handshake is to verify bidirectional communication and ensure reliable delivery before application data is transmitted. <br> 핸드쉐이크의 본질적인 목적은 애플리케이션 데이터가 전송되기 전에 양방향 통신이 정상 동작함을 검증하고 안정적인 데이터 딜리버리를 보장하는 준비를 마치기 위함입니다.</p>\n\n<hr>"
+      },
+      {
+        "title": "Korean Summary",
+        "content": "<p>TCP는 Connection-Oriented Protocol이다.</p>\n\n<p>즉 데이터를 보내기 전에 연결을 먼저 수립해야 한다.</p>\n\n<p>과정은 다음과 같다.</p>\n\n<p>Step 1</p>\n\n<p>Client</p>\n\n<p>SYN</p>\n\n<p>\"연결하고 싶습니다.\"</p>\n\n<p>↓</p>\n\n<p>Step 2</p>\n\n<p>Server</p>\n\n<p>SYN-ACK</p>\n\n<p>\"연결 요청을 받았고 나도 준비되었습니다.\"</p>\n\n<p>↓</p>\n\n<p>Step 3</p>\n\n<p>Client</p>\n\n<p>ACK</p>\n\n<p>\"확인했습니다.\"</p>\n\n<p>↓</p>\n\n<p>Connection Established</p>\n\n<hr>"
+      },
+      {
+        "title": "Visual Flow",
+        "content": "<p>Client</p>\n\n<p>↓</p>\n\n<p>SYN</p>\n\n<p>↓</p>\n\n<p>Server</p>\n\n<p>↓</p>\n\n<p>SYN + ACK</p>\n\n<p>↓</p>\n\n<p>Client</p>\n\n<p>↓</p>\n\n<p>ACK</p>\n\n<p>↓</p>\n\n<p>Connection Established</p>\n\n<hr>"
+      },
+      {
+        "title": "Why Is It Needed?",
+        "content": "<p>TCP는 신뢰성 있는 전송을 제공해야 한다. <br> TCP must provide reliable transmission.</p>\n\n<p>Handshake를 통해: <br> Through the Handshake:</p>\n\n<ul>\n<li>양방향 통신 가능 여부 확인 <br> - Confirm bidirectional communication capabilities</li>\n<li>초기 Sequence Number 동기화 <br> - Synchronize initial sequence numbers</li>\n<li>패킷 손실 방지 준비 <br> - Prepare to prevent packet loss</li>\n<li>Reliable Connection 수립 <br> - Establish a reliable connection</li>\n</ul>\n\n<hr>"
+      },
+      {
+        "title": "Important Concepts",
+        "content": ""
+      },
+      {
+        "title": "SYN",
+        "content": "<p>Synchronize <br> 동기화 요청</p>\n\n<p>Connection Request <br> 세션 연결 요청</p>\n\n<hr>"
+      },
+      {
+        "title": "ACK",
+        "content": "<p>Acknowledgement <br> 수신 확인 응답</p>\n\n<p>Packet Received <br> 패킷 수신 성공 알림</p>\n\n<hr>"
+      },
+      {
+        "title": "Sequence Number <br> 시퀀스 번호",
+        "content": "<p>Used to: <br> 사용 목적:</p>\n\n<ul>\n<li>Detect lost packets <br> - 유실된 패킷 검출</li>\n<li>Detect duplicate packets <br> - 중복 전송된 패킷 제거</li>\n<li>Reassemble packets in order <br> - 패킷의 순서 있는 재조립</li>\n</ul>\n\n<hr>"
+      },
+      {
+        "title": "Reliable Communication <br> 신뢰성 있는 통신",
+        "content": "<p>TCP guarantees: <br> TCP는 다음을 보장합니다:</p>\n\n<ul>\n<li>Ordered Delivery <br> - 전송 순서 보장</li>\n<li>Error Detection <br> - 데이터 오류 검출</li>\n<li>Retransmission <br> - 패킷 소실 시 자동 재전송</li>\n</ul>\n\n<hr>"
+      },
+      {
+        "title": "Common Interview Follow-up",
+        "content": "<h3>Q1</h3>\n\n<p>Why are there 3 steps? <br> 왜 하필 3단계여야 할까요?</p>\n\n<p>Why not 2? <br> 2단계로는 왜 불가능할까요?</p>\n\n<p>Expected Answer <br> 모범 답변</p>\n\n<p>Both sides must verify that they can send and receive packets. <br> 클라이언트와 서버 모두 자신이 패킷을 보낼 수 있고 받을 수도 있음을 완전하게 검증해야 합니다.</p>\n\n<p>Two steps cannot fully verify bidirectional communication. <br> 2단계 구조에서는 서버 입장이나 클라이언트 입장 중 한쪽의 양방향 수신 여부를 완전하게 검증할 수 없습니다.</p>\n\n<hr>\n\n<h3>Q2</h3>\n\n<p>Why not 4 steps? <br> 왜 4단계는 아닐까요?</p>\n\n<p>Expected Answer <br> 모범 답변</p>\n\n<p>Three steps are sufficient to establish the connection efficiently. <br> 양방향 통신 여부를 검증하고 상태를 동기화하기에 3단계만으로도 효율적이고 충분합니다.</p>\n\n<hr>\n\n<h3>Q3</h3>\n\n<p>What happens after the handshake? <br> 핸드쉐이크가 끝난 후에는 무슨 일이 일어납니까?</p>\n\n<p>Expected Answer <br> 모범 답변</p>\n\n<p>Application data can be transmitted. <br> 실제 애플리케이션 데이터(HTTP 요청 등)를 전송할 수 있습니다.</p>\n\n<p>TCP begins reliable data transfer. <br> TCP 프로토콜이 신뢰성 있는 데이터 전송 프로세스를 개시합니다.</p>\n\n<hr>\n\n<h3>Q4</h3>\n\n<p>What happens if the SYN packet is lost? <br> 최초의 SYN 패킷이 유실되면 어떻게 됩니까?</p>\n\n<p>Expected Answer <br> 모범 답변</p>\n\n<p>The client retransmits the SYN packet after a timeout. <br> 클라이언트는 타임아웃 이후 SYN 패킷을 자동으로 다시 전송(Retransmit)합니다.</p>\n\n<hr>\n\n<h3>Q5</h3>\n\n<p>What happens if the final ACK is lost? <br> 마지막 ACK 패킷이 유실되면 어떻게 됩니까?</p>\n\n<p>Expected Answer <br> 모범 답변</p>\n\n<p>The server may retransmit the SYN-ACK until timeout. <br> 서버는 마지막 ACK를 받지 못했으므로 SYN-ACK 패킷을 재전송하다가 결국 타임아웃 처리합니다.</p>\n\n<p>TCP includes mechanisms to handle lost packets. <br> TCP는 이와 같은 패킷 유실 상황을 유연하게 처리할 수 있는 신뢰성 제어 로직을 내장하고 있습니다.</p>\n\n<hr>\n\n<h3>Q6</h3>\n\n<p>What is a Half-Open Connection? <br> Half-Open Connection(반개방 연결)이란 무엇입니까?</p>\n\n<p>Expected Answer <br> 모범 답변</p>\n\n<p>One side believes the connection exists while the other side does not. <br> 통신 양단 중 한쪽만 세션 연결이 유효하다고 생각하고, 상대방은 연결 정보를 잃어버렸거나 없는 상태입니다.</p>\n\n<hr>"
+      },
+      {
+        "title": "Real Production Example",
+        "content": "<p>Client <br> 클라이언트</p>\n\n<p>↓</p>\n\n<p>SYN</p>\n\n<p>↓</p>\n\n<p>Load Balancer <br> 로드 밸런서</p>\n\n<p>↓</p>\n\n<p>Backend Server <br> 백엔드 서버</p>\n\n<p>↓</p>\n\n<p>SYN-ACK</p>\n\n<p>↓</p>\n\n<p>ACK</p>\n\n<p>↓</p>\n\n<p>Application Traffic <br> 애플리케이션 실제 트래픽</p>\n\n<p>If this handshake fails, users cannot establish connections to the service. <br> 만약 이 핸드쉐이크가 실패하면, 엔드 유저는 서비스로의 어떠한 네트워크 세션도 맺을 수 없게 됩니다.</p>\n\n<hr>"
+      },
+      {
+        "title": "Common Troubleshooting Scenarios",
+        "content": ""
+      },
+      {
+        "title": "Scenario 1 <br> 시나리오 1",
+        "content": "<p>Cannot connect to service <br> 서비스 접속 불가 장애</p>\n\n<p>Investigate: <br> 확인해야 할 사항:</p>\n\n<ul>\n<li>Firewall <br> - 방화벽 차단 정책</li>\n<li>Security Groups <br> - 보안 그룹(Security Group) 설정</li>\n<li>Network ACL <br> - 서브넷 단위 Network ACL 규칙</li>\n<li>Listening Ports <br> - 서버 상의 데몬 포트 리스닝(Listen) 상태</li>\n</ul>\n\n<hr>"
+      },
+      {
+        "title": "Scenario 2 <br> 시나리오 2",
+        "content": "<p>Intermittent Connection Failures <br> 간헐적인 네트워크 연결 끊김 및 실패</p>\n\n<p>Investigate: <br> 확인해야 할 사항:</p>\n\n<ul>\n<li>Packet Loss <br> - 라우터/물리 회선 상의 패킷 유실률</li>\n<li>Retransmissions <br> - 패킷 재전송(Retransmission) 카운트 증가 추이</li>\n<li>Load Balancer Health Checks <br> - 로드 밸런서의 비정상적인 헬스 체크 상태</li>\n</ul>\n\n<hr>"
+      },
+      {
+        "title": "Scenario 3 <br> 시나리오 3",
+        "content": "<p>Slow Connection Establishment <br> 세션 연결 수립 속도가 매우 느려짐</p>\n\n<p>Investigate: <br> 확인해야 할 사항:</p>\n\n<ul>\n<li>DNS Latency <br> - 도메인 네임 해석 지연(DNS Latency)</li>\n<li>SYN Retransmissions <br> - SYN 패킷 유실로 인한 재전송 딜레이</li>\n<li>Network Congestion <br> - 대역폭 포화로 인한 네트워크 혼잡(Congestion)</li>\n</ul>\n\n<hr>"
+      },
+      {
+        "title": "Related Linux Commands",
+        "content": ""
+      },
+      {
+        "title": "Check Connections",
+        "content": "<pre><code class=\"language-bash\">ss -tan</code></pre>\n\n<hr>"
+      },
+      {
+        "title": "Packet Capture",
+        "content": "<pre><code class=\"language-bash\">tcpdump -i eth0</code></pre>\n\n<hr>"
+      },
+      {
+        "title": "Connection Statistics",
+        "content": "<pre><code class=\"language-bash\">netstat -s</code></pre>\n\n<hr>"
+      },
+      {
+        "title": "ByteDance Follow-up Possibility",
+        "content": "<p>Very High <br> 출제 확률 매우 높음</p>\n\n<p>Typical Path <br> 면접 시 전형적인 꼬리 질문 흐름</p>\n\n<p>TCP Handshake <br> TCP 3-Way Handshake 기본 동작</p>\n\n<p>↓</p>\n\n<p>TCP vs UDP <br> TCP와 UDP 프로토콜의 아키텍처적 차이</p>\n\n<p>↓</p>\n\n<p>Packet Loss <br> 패킷 유실 발생 시 프로토콜 동작</p>\n\n<p>↓</p>\n\n<p>Connection States <br> TCP 커넥션 상태 상태머신 (SYN_SENT, TIME_WAIT 등)</p>\n\n<p>↓</p>\n\n<p>Load Balancer <br> L4/L7 로드 밸런서 연계 흐름</p>\n\n<p>↓</p>\n\n<p>High Latency <br> 네트워크 고지연 장애 분석</p>\n\n<p>↓</p>\n\n<p>Network Troubleshooting <br> 실무 도구(tcpdump, ss)를 활용한 트러블슈팅 종합</p>\n\n<hr>"
+      },
+      {
+        "title": "Personal Notes",
+        "content": "<p>Strong Interview Message <br> 면접 합격을 위한 핵심 메시지</p>\n\n<p>TCP is not just about sending packets. <br> TCP는 단순히 패킷을 쏘아보내는 프로토콜이 아닙니다.</p>\n\n<p>TCP is about establishing a reliable communication channel before data transfer begins. <br> 데이터를 실제로 전송하기 전에 엔드포인트 간에 물리적, 논리적으로 신뢰 가능한 통신 채널을 수립하는 데 그 목적이 있습니다.</p>\n\n<hr>\n\n<p>Strong Interview Quote <br> 인상적인 면접 답변용 문구</p>\n\n<p>\"The purpose of the handshake is not simply connection establishment. It is to verify bidirectional communication and synchronize state between both endpoints.\" <br> \"핸드쉐이크의 본질적 목적은 단순한 연결 맺기가 아닙니다. 양단 간의 가용한 양방향 통신 경로를 최종 검증하고, 패킷 정렬 상태(State)를 일치시키는 것에 그 의미가 있습니다.\"</p>\n\n<p>This sounds much more senior than simply saying SYN, SYN-ACK, ACK. <br> 단순히 SYN, SYN-ACK, ACK 단계만 외워서 대답하는 것보다 훨씬 시니어급 SRE 엔지니어다운 전문성을 보여줄 수 있는 발언입니다.</p>\n\n<hr>"
+      }
+    ]
+  },
+  {
     "id": "linux-q02-cpu-100",
     "title": "Linux Interview Question 02",
     "category": "Linux",
