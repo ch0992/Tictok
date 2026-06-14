@@ -296,6 +296,114 @@ StartLimitBurst=5`,
           <li style="margin-bottom: 6px;"><strong>동작 메커니즘:</strong> 세션이 최종적으로 성립되었으므로 3계층/4계층 채널 세팅을 완료하고 HTTP GET 등의 Application Layer 실제 데이터 트래픽을 즉시 교환합니다.</li>
           <li style="margin-bottom: 6px;"><strong>소켓 상태:</strong> 통신 양단 모두 <code>ESTABLISHED</code> 상태를 단단히 유지합니다.</li>
           <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅 Point:</strong> 커넥션 수립은 정상이나 데이터 통신에 실패(예: HTTP 504 Gateway Timeout)하는 경우에는 네트워크 레벨보다는 WAS/DB 병목, Web Server 스레드 풀 고갈 장애일 가능성이 매우 높으므로 애플리케이션 분석으로 빠르게 넘어가야 합니다.</li>
+    }
+  };
+
+  const dnsLifecycleData = {
+    dns: {
+      activeStep: 1,
+      console: `; &lt;&lt;&gt;&gt; DiG 9.10.6 &lt;&lt;&gt;&gt; +trace www.google.com
+;; global options: +cmd
+.           518400  IN  <span class="console-highlight">NS<span class="console-tooltip">NS (Name Server) Record: 도메인의 DNS 쿼리를 처리할 권한이 있는 네임서버 목록을 지정합니다. 여기선 루트 네임서버(.)를 지칭합니다.</span></span>  a.root-servers.net.
+.           518400  IN  NS  b.root-servers.net.
+;; Received 525 bytes from 192.168.1.1#53 in 12 ms
+
+com.        172800  IN  NS  a.gtld-servers.net.
+com.        172800  IN  NS  b.gtld-servers.net.
+;; Received 1173 bytes from a.root-servers.net#53 in 24 ms
+
+google.com. 172800  IN  NS  ns1.google.com.
+google.com. 172800  IN  NS  ns2.google.com.
+;; Received 830 bytes from a.gtld-servers.net#53 in 28 ms
+
+www.google.com. 300 IN  <span class="console-highlight">A<span class="console-tooltip">A (Address) Record: 도메인 네임을 IPv4 주소로 변환하는 가장 핵심적인 레코드입니다.</span></span>  <span class="console-highlight correct-flag">142.250.196.142<span class="console-tooltip">최종 확인된 구글 서버의 IPv4 주소입니다. 브라우저는 이제 이 IP 주소를 대상으로 L4 TCP 연결을 시도하게 됩니다.</span></span>
+;; Received 50 bytes from ns1.google.com#53 in 15 ms`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #0ea5e9; margin-right: 6px;"></i><strong>도메인명을 IP 주소로 변환하는 DNS Resolution 단계입니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>탐색 순서:</strong> Local Cache $\rightarrow$ OS Hosts $\rightarrow$ Local DNS Resolver $\rightarrow$ Root DNS 서버 (.) $\rightarrow$ TLD (.com) 네임서버 $\rightarrow$ Google 권한 있는 네임서버(Authoritative NS) 순으로 재귀 조회가 수행됩니다.</li>
+          <li style="margin-bottom: 6px;"><strong>핵심 메커니즘:</strong> 최종적으로 Google 네임서버가 구글 서버의 A 레코드 IP(<code>142.250.196.142</code>)를 리턴합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅:</strong> 도메인 접속 불가 시 <code>dig +trace 도메인</code>을 사용하여 어느 단계의 네임서버가 쿼리에 응답하지 않거나 잘못된 CNAME/A 정보를 주는지 즉각 식별해 내야 합니다.</li>
+        </ul>
+      `
+    },
+    tcp: {
+      activeStep: 2,
+      console: `12:51:02.102941 IP 192.168.1.10.49152 &gt; 142.250.196.142.443: <span class="console-highlight correct-flag">Flags [S]<span class="console-tooltip">SYN: 클라이언트가 서버에 L4 포트 443(HTTPS) 연결 수립을 요청합니다.</span></span>, seq 1000, win 64240, options [mss 1460,sackOK]
+12:51:02.122482 IP 142.250.196.142.443 &gt; 192.168.1.10.49152: <span class="console-highlight correct-flag">Flags [S.]<span class="console-tooltip">SYN-ACK: 구글 서버가 접속 수락 응답과 함께 자신의 시퀀스 번호를 교환합니다.</span></span>, seq 5000, ack 1001, win 65535, options [mss 1460,sackOK]
+12:51:02.141910 IP 192.168.1.10.49152 &gt; 142.250.196.142.443: <span class="console-highlight correct-flag">Flags [.]<span class="console-tooltip">ACK: 클라이언트가 최종 확인 패킷을 회신하여 3-Way Handshake를 마칩니다.</span></span>, ack 5001, win 64240`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #10b981; margin-right: 6px;"></i><strong>L4 전송 계층 소켓 채널을 여는 TCP 3-Way Handshake 단계입니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>포트 설정:</strong> URL에 <code>https://</code> 프로토콜을 사용하고 있으므로 클라이언트는 구글 서버의 <strong>TCP 443</strong> 포트를 향해 접속을 요청(SYN)합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>양방향 신뢰성 확보:</strong> SYN $\rightarrow$ SYN-ACK $\rightarrow$ ACK 단계를 순서대로 거치며 초기 시퀀스 번호를 동기화하여 패킷 소실이나 순서가 꼬이는 현상을 원천 방어합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅:</strong> 만약 TCP 핸드쉐이크가 중간에 끊기거나 SYN 재전송 루프에 빠진다면 클라이언트 측 라우터의 아웃바운드 ACL 및 서버 측 인바운드 보안 그룹에서 443 포트가 차단되지 않았는지 검사해야 합니다.</li>
+        </ul>
+      `
+    },
+    tls: {
+      activeStep: 3,
+      console: `$ openssl s_client -connect www.google.com:443 -tls1_3
+CONNECTED(00000003)
+---
+Certificate chain
+ 0 s:CN = www.google.com
+   i:C = US, O = Google Trust Services, <span class="console-highlight">CN = GTS CA 1C3<span class="console-tooltip">인증서 서명 체인: 구글 서버가 전송한 인증서를 발급한 공인 CA 기관 정보입니다. 브라우저는 이 CA 정보가 로컬 루트 인증서 저장소에 존재하는지 교차 검증합니다.</span></span>
+---
+New, <span class="console-highlight correct-flag">TLSv1.3<span class="console-tooltip">TLSv1.3 프로토콜: 대칭 키 생성 단계를 극도로 최적화하여 1-RTT(1 Round Trip Time) 만에 보안 세션을 맺는 최신 보안 레이어입니다.</span></span>, Cipher is <span class="console-highlight">TLS_AES_256_GCM_SHA384<span class="console-tooltip">Cipher Suite (암호화 스위트): 세션 보안에 사용될 대칭 암호화 알고리즘(AES_256_GCM)과 해시 함수(SHA384) 규격입니다.</span></span>
+Server public key is 256 bit
+Secure Renegotiation IS NOT supported
+Compression: NONE
+Expansion: NONE
+No ALPN negotiated
+Early data was not sent
+Verify return code: 0 (ok)
+---`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #f59e0b; margin-right: 6px;"></i><strong>암호화된 안전 터널을 수립하는 TLS Cryptographic Handshake 단계입니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>암호화 협상 (Client/Server Hello):</strong> 브라우저와 구글 서버가 지원 가능한 TLS 규격(TLS 1.3 권장) 및 암호화 조합(Cipher Suite) 목록을 교환 및 합의합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>인증서 신뢰 검증:</strong> 서버가 송부한 공개키 인증서가 공인 발급 기관(CA) 서명을 지녔는지, 만료일은 지나지 않았는지 확인해 중간자 공격(MITM)을 방어합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅:</strong> 보안 에러 또는 SSL handshake 실패가 난다면 서버측 도메인 인증서 갱신 누락(Expired Certificate) 여부, 클라이언트의 오래된 브라우저 버전으로 인한 프로토콜 호환 불일치를 dig나 openssl을 통해 규명해야 합니다.</li>
+        </ul>
+      `
+    },
+    http: {
+      activeStep: 4,
+      console: `$ curl -I https://www.google.com
+<span class="console-highlight correct-flag">HTTP/2 200<span class="console-tooltip">HTTP Status Code 200 OK: 서버가 클라이언트의 요청을 성공적으로 처리하고 본문 데이터를 회신함을 알립니다. 최신 HTTP/2 다중화 규격을 적용하고 있습니다.</span></span>
+content-type: text/html; charset=UTF-8
+date: Sat, 14 Jun 2026 01:07:35 GMT
+expires: -1
+cache-control: private, max-age=0
+<span class="console-highlight">strict-transport-security<span class="console-tooltip">HSTS (Strict-Transport-Security): 이후 이 도메인으로의 모든 통신은 HTTP가 아닌 안전한 HTTPS로만 강제 전환하여 접속하도록 명시하는 보안 헤더입니다.</span></span>: max-age=31536000
+server: gws
+x-xss-protection: 0
+x-frame-options: SAMEORIGIN`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #8b5cf6; margin-right: 6px;"></i><strong>암호화 터널 안에서 HTTP 요청(Request) 및 응답(Response)을 처리합니다.</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>L7 요청 전송:</strong> 브라우저는 <code>GET / HTTP/2</code> 메시지를 발송하여 구글 검색 메인 페이지의 HTML 자원을 요청합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>헤더 옵션 조율:</strong> 구글 웹 서버(GWS)는 요청을 즉시 수락하여 캐시 제어 조건(private, max-age=0), HSTS 보안 규정 및 HTML 본문 텍스트 스트림을 함께 반환합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 트러블슈팅:</strong> L4/L5 네트워크는 정상인데 <strong>HTTP 5xx Server Error</strong>나 <strong>504 Gateway Timeout</strong>이 발생하는 경우, 백엔드 애플리케이션의 메모리 누수, 스레드 풀 잠김, 또는 연동 DB 쿼리 병목을 조사해야 합니다.</li>
+        </ul>
+      `
+    },
+    render: {
+      activeStep: 5,
+      console: `[Browser DevTools Performance Timeline]
+1. Parse HTML (Received HTML stream from server, building DOM tree)
+2. Send Requests (Encountered &lt;link rel="stylesheet"&gt;, fetch style.css)
+3. CSSOM Tree (Finished parsing styles, building style hierarchy)
+4. Layout (Compute exact positions and sizes of all visual nodes)
+5. Paint (Drawing pixels to graphics cards buffer)
+6. <span class="console-highlight correct-flag">Composite Layers<span class="console-tooltip">레이어 합성(Composite): 각 부분을 레이어화하여 GPU 하드웨어 가속을 통해 빠르게 합치는 마지막 페인팅 최적화 단계입니다.</span></span> (Page fully interactive!)`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-check" style="color: #10b981; margin-right: 6px;"></i><strong>웹 서버로부터 전달받은 리소스를 사용자 화면에 그립니다 (Rendering).</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>DOM & CSSOM 트리 빌드:</strong> 서버가 준 HTML과 CSS 소스를 한 줄씩 읽으며 객체 트리(DOM, CSSOM)로 재조합합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>페인트 및 래스터화 (Layout & Paint):</strong> 객체 트리를 렌더 트리로 결합해 각 엘리먼트의 정확한 크기와 위치를 정한 뒤 모니터 화면에 그래픽 연산으로 그려냅니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE / FE 최적화 Point:</strong> 첫 페이지 진입 후 화면이 나타나기까지의 속도를 개선하기 위해 <strong>핵심 렌더링 경로(CRP)</strong>를 최적화(LCP 지표 개선)하고, 브로킹 스크립트(JS)의 <code>async / defer</code> 배치 및 리소스 사전 압축/지연 로딩 설정을 적용해야 합니다.</li>
         </ul>
       `
     }
@@ -468,6 +576,20 @@ StartLimitBurst=5`,
         "tcpdump를 활용한 실시간 TCP 핸드쉐이크 패킷(SYN, SYN-ACK, ACK) 캡처 및 필터링",
         "ss -tan 및 netstat을 통한 TCP 소켓 연결 상태(SYN_SENT, SYN_RECV, ESTABLISHED) 모니터링",
         "sysctl 커널 파라미터(tcp_syncookies, tcp_max_syn_backlog) 튜닝을 통한 네트워크 보안강화"
+    },
+    "network-q02-dns-resolution": {
+      title: "도메인 접속 시 웹 통신 전 과정 흐름 및 장애 격리",
+      icon: "fa-solid fa-globe",
+      summary: "브라우저 주소창에 도메인을 입력하고 진입할 때 일어나는 DNS 조회, TCP, TLS, HTTP 트랜잭션 및 렌더링 생명주기와 계층별 트러블슈팅 방법을 평가합니다.",
+      questions: [
+        "DNS 조회의 재귀적(Recursive) 탐색 방식과 반복적(Iterative) 탐색 방식의 차이는?",
+        "TLS 1.3 핸드쉐이크가 이전 버전에 비해 연결 지연시간(RTT)을 단축할 수 있는 이유는?",
+        "HTTP 응답 코드가 502 Bad Gateway인 경우, 로드 밸런서와 백엔드 서버 중 어디를 디버깅해야 하는가?"
+      ],
+      skills: [
+        "dig +trace를 활용한 도메인 위임 및 네임서버 조회 경로 추적",
+        "openssl s_client를 사용한 TLS 협상 상태 및 인증서 신뢰 체인 유효성 분석",
+        "curl -v 헤더 분석 및 브라우저 CRP(Critical Rendering Path) 단계별 로딩 최적화"
       ]
     }
   };
@@ -1788,6 +1910,72 @@ $ df -h /dev/sda1
           </div>
         </div>
       `;
+    } else if (doc.id === 'network-q02-dns-resolution') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-globe" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          Web Request Lifecycle Interactive Simulator (웹 요청 생명주기 시뮬레이터)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          <!-- Visual diagram row -->
+          <div class="dns-nodes-diagram" id="dnsNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 180px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; transition: all 0.3s ease;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="dnsStepGrid" style="grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="dns" style="padding: 10px;">
+              <div style="font-weight: 800; font-size: 0.7rem; color: hsl(var(--accent)); text-transform: uppercase;">Phase 1</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;">DNS 조회</div>
+              <div style="font-size: 0.65rem; color: var(--text-secondary);">DNS Resolution</div>
+            </div>
+            <div class="cpu-dial-card" data-step="tcp" style="padding: 10px;">
+              <div style="font-weight: 800; font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Phase 2</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;">TCP 연결</div>
+              <div style="font-size: 0.65rem; color: var(--text-secondary);">3-Way Handshake</div>
+            </div>
+            <div class="cpu-dial-card" data-step="tls" style="padding: 10px;">
+              <div style="font-weight: 800; font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Phase 3</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;">TLS 암호화</div>
+              <div style="font-size: 0.65rem; color: var(--text-secondary);">Security Tunnel</div>
+            </div>
+            <div class="cpu-dial-card" data-step="http" style="padding: 10px;">
+              <div style="font-weight: 800; font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Phase 4</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;">HTTP GET</div>
+              <div style="font-size: 0.65rem; color: var(--text-secondary);">Data Exchange</div>
+            </div>
+            <div class="cpu-dial-card" data-step="render" style="padding: 10px;">
+              <div style="font-weight: 800; font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase;">Phase 5</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;">화면 렌더링</div>
+              <div style="font-size: 0.65rem; color: var(--text-secondary);">CRP Page Draw</div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="dnsTerminalTitle"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i>Command Output Console</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 200px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="dnsConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">단계별 분석 & SRE 장애 포인트</span></div>
+                <div class="card-body" id="dnsAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     // Accordion: Interviewer's Intent
@@ -2002,6 +2190,195 @@ $ df -h /dev/sda1
 
       // Initialize simulator with first step
       updateSimulator('syn');
+    }
+
+    }
+
+    // BIND SIMULATOR LOGIC FOR network-q02-dns-resolution
+    if (doc.id === 'network-q02-dns-resolution') {
+      const dnsStepCards = document.querySelectorAll('#dnsStepGrid .cpu-dial-card');
+      const dnsConsoleOutput = document.getElementById('dnsConsoleOutput');
+      const dnsAnalysisText = document.getElementById('dnsAnalysisText');
+      const dnsNodesDiagram = document.getElementById('dnsNodesDiagram');
+      const dnsTerminalTitle = document.getElementById('dnsTerminalTitle');
+
+      function updateDnsDiagram(stepKey) {
+        let diagramHTML = '';
+        if (stepKey === 'dns') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; position: relative;">
+              <!-- Top Row: Root, TLD, Auth -->
+              <div style="display: flex; gap: 12px; justify-content: center; width: 100%; flex-wrap: wrap;">
+                <div class="network-node" style="border: 1px solid var(--border-color); padding: 6px 10px; border-radius: 8px; font-size: 0.75rem; background: rgba(255,255,255,0.01); text-align: center; color: var(--text-secondary);">Root DNS (.)</div>
+                <div class="network-node" style="border: 1px solid var(--border-color); padding: 6px 10px; border-radius: 8px; font-size: 0.75rem; background: rgba(255,255,255,0.01); text-align: center; color: var(--text-secondary);">TLD DNS (.com)</div>
+                <div class="network-node" style="border: 2px solid #0ea5e9; padding: 6px 10px; border-radius: 8px; font-size: 0.75rem; background: rgba(14, 165, 233, 0.05); text-align: center; box-shadow: 0 0 10px rgba(14, 165, 233, 0.15); font-weight: bold; color: #0ea5e9;">Google NS</div>
+              </div>
+              
+              <!-- Connection wire top-to-mid -->
+              <div style="width: 2px; height: 10px; background: #334155;"></div>
+              
+              <!-- Middle Row: Local Resolver -->
+              <div class="network-node" style="border: 2px solid #f59e0b; padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; background: rgba(245, 158, 11, 0.05); text-align: center; box-shadow: 0 0 10px rgba(245, 158, 11, 0.15); font-weight: bold; color: #f59e0b; position: relative;">
+                Local DNS Resolver (8.8.8.8)
+                <div style="font-size: 0.65rem; color: var(--text-secondary); font-weight: 500; margin-top: 2px;">Recursive Querying</div>
+              </div>
+              
+              <!-- Connection wire mid-to-bottom -->
+              <div style="width: 2px; height: 10px; background: #334155;"></div>
+
+              <!-- Bottom Row: Client -->
+              <div class="network-node" style="border: 2px solid #10b981; padding: 8px 12px; border-radius: 10px; font-size: 0.85rem; background: rgba(16, 185, 129, 0.05); text-align: center; font-weight: bold; color: #10b981; box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);">
+                Client Browser
+                <div style="font-size: 0.7rem; color: var(--text-secondary); font-weight: 500; margin-top: 4px;">Lookup: google.com</div>
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'tcp') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+              <!-- Client Node -->
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Client</div>
+                <div style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-secondary);">IP: 192.168.1.10</div>
+              </div>
+              
+              <!-- Packet Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 16px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center;">
+                <div class="packet-lane-line" id="dnsPacketLane" style="width: 100%; height: 4px; background: linear-gradient(90deg, #0ea5e9, #10b981); border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 10px; height: 10px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 10px #10b981;"></div>
+                  <div class="packet-direction-arrow" style="position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.6rem; font-weight: bold; color: #cbd5e1; background: #1e293b; padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border-color);">
+                    SYN / SYN-ACK / ACK
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Server Node -->
+              <div class="network-node" style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.15);">
+                <div style="font-size: 1.1rem; color: #10b981; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Google Server</div>
+                <div style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-secondary);">IP: 142.250.196.142</div>
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'tls') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+              <!-- Client Node -->
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Client</div>
+                <div style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-secondary);">IP: 192.168.1.10</div>
+              </div>
+              
+              <!-- SSL Glow Lane -->
+              <div style="flex-grow: 1; margin: 0 16px; text-align: center; position: relative;">
+                <div style="width: 100%; height: 6px; background: linear-gradient(90deg, #3b82f6, #8b5cf6, #10b981); border-radius: 3px; box-shadow: 0 0 10px rgba(139, 92, 246, 0.6); display: flex; align-items: center; justify-content: center; position: relative;">
+                  <div style="position: absolute; top: -12px; font-size: 1.1rem; color: #f59e0b; filter: drop-shadow(0 0 4px rgba(245,158,11,0.6));"><i class="fa-solid fa-shield-halved"></i></div>
+                </div>
+                <div style="font-size: 0.6rem; color: #cbd5e1; font-weight: bold; margin-top: 8px;">TLS 1.3 Securing Session</div>
+              </div>
+              
+              <!-- Server Node -->
+              <div class="network-node" style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.15);">
+                <div style="font-size: 1.1rem; color: #10b981; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Google Server</div>
+                <div style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-secondary);">IP: 142.250.196.142</div>
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'http') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+              <!-- Client Node -->
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Client</div>
+                <div style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-secondary);">IP: 192.168.1.10</div>
+              </div>
+              
+              <!-- Data Flowing Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 16px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center;">
+                <div class="packet-lane-line" id="dnsPacketLane" style="width: 100%; height: 4px; background: #10b981; border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot established-flow" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);"></div>
+                  <div style="position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 0.6rem; font-weight: bold; color: #10b981; background: #1e293b; padding: 1px 5px; border-radius: 3px; border: 1px solid #10b981; white-space: nowrap;">
+                    HTTP/2 DATA TRANSIT
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Server Node -->
+              <div class="network-node" style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.15);">
+                <div style="font-size: 1.1rem; color: #10b981; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Google Server</div>
+                <div style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-secondary);">IP: 142.250.196.142</div>
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'render') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: center; align-items: center;">
+              <!-- Mock Web Browser window frame -->
+              <div style="width: 100%; max-width: 340px; background: #1e293b; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+                <div style="background: #0f172a; padding: 6px 10px; display: flex; align-items: center; gap: 6px;">
+                  <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#ef4444;"></span>
+                  <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#f59e0b;"></span>
+                  <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#10b981;"></span>
+                  <div style="background: #334155; border-radius: 4px; padding: 1px 8px; font-size: 0.65rem; color: #cbd5e1; flex-grow: 1; text-align: left; display: flex; align-items: center; gap: 4px;">
+                    <i class="fa-solid fa-lock" style="color:#10b981; font-size:0.6rem;"></i> https://www.google.com
+                  </div>
+                </div>
+                <div style="background: #090d10; padding: 18px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                  <div style="font-family: var(--font-heading); font-size: 1.25rem; font-weight: bold; background: linear-gradient(90deg, #4285F4, #34A853, #FBBC05, #4285F4); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px; letter-spacing: -1px;">Google</div>
+                  <div style="display: flex; gap: 4px; width: 90%;">
+                    <div style="border: 1px solid #334155; background: #1e293b; border-radius: 20px; padding: 3px 10px; font-size: 0.65rem; color: #94a3b8; flex-grow: 1; text-align: left;"><i class="fa-solid fa-magnifying-glass" style="margin-right: 4px; font-size:0.6rem;"></i>Search something...</div>
+                    <button style="background: #3b82f6; border: none; color: #ffffff; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 0.6rem;"><i class="fa-solid fa-search"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+        return diagramHTML;
+      }
+
+      function updateDnsSimulator(stepKey) {
+        const stepData = dnsLifecycleData[stepKey];
+        if (!stepData) return;
+
+        // Update console title
+        if (dnsTerminalTitle) {
+          if (stepKey === 'dns') dnsTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>dig Shell Command Output';
+          if (stepKey === 'tcp') dnsTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>tcpdump Connection Capture';
+          if (stepKey === 'tls') dnsTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>openssl SSL Handshake Output';
+          if (stepKey === 'http') dnsTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>curl HTTP Header Response';
+          if (stepKey === 'render') dnsTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>Browser Rendering Lifecycle CRP';
+        }
+
+        // 1. Update diagram
+        dnsNodesDiagram.innerHTML = updateDnsDiagram(stepKey);
+
+        // 2. Update logs and descriptions
+        dnsConsoleOutput.innerHTML = stepData.console;
+        dnsAnalysisText.innerHTML = stepData.analysis;
+      }
+
+      dnsStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          dnsStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+          
+          const stepKey = card.dataset.step;
+          updateDnsSimulator(stepKey);
+        });
+      });
+
+      // Initialize simulator with first step
+      updateDnsSimulator('dns');
     }
 
     bindStatusSelector(doc.id);
