@@ -734,6 +734,193 @@ all    1.10   <span class="console-highlight">0.15</span>     0.10   98.65`,
     }
   };
 
+  const roceSimData = {
+    lossy: {
+      console: `# SRE Diagnostics - Congested RoCEv2 Network WITH NO PFC/ECN (Lossy Ethernet)
+# 1. Check if PAUSE frames are being transmitted or received
+$ ethtool -S eth0 | grep -E "pause|dropped"
+rx_priority_pause_packets: 0
+tx_priority_pause_packets: 0
+rx_dropped_packets: 148203 <span class="console-highlight">(Switch Buffer Overflow Drops)<span class="console-tooltip">rx_dropped_packets: 스위치 버퍼가 가득 차 패킷이 유실(Drop)되고 있으며, PFC가 활성화되지 않아 송신 측에 전송 중단 신호(PAUSE)를 보내지 못했습니다.</span></span>
+
+# 2. RDMA transport error stats (Go-Back-N Hardware Retransmission active)
+$ cat /sys/class/infiniband/mlx5_0/ports/1/hw_counters/out_of_buffer
+rx_out_of_buffer: 84092
+rx_cnp_handled: 0 <span class="console-highlight">(No ECN / CNP)<span class="console-tooltip">rx_cnp_handled: ECN 혼잡 알림(Congestion Notification Packet)이 활성화되어 있지 않아 스위치가 소스 NIC에 속도 제한 신호를 보내지 못하고 있습니다.</span></span>
+
+# 3. RDMA performance status - Retransmission Storm & TCP Fallback
+$ rping -c -a 10.10.10.2 -v
+rping: rdma_resolve_addr failed
+<span class="console-highlight">fallback to TCP socket: throughput collapsed to 0.4 GB/s<span class="console-tooltip">rping: RDMA 연결이 패킷 유실로 해제되어 일반 TCP/IP 스택으로 폴백되었거나 하드웨어의 무분별한 Go-Back-N 재전송 요청으로 대역폭이 극단적으로 붕괴되었습니다.</span></span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation" style="color: #ef4444; margin-right: 6px;"></i><strong>Lossy Ethernet 환경에서의 RoCE 동작 실패</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>스위치 버퍼 오버플로우:</strong> 분산 학습 시 다수의 GPU 서버가 동일한 목적지 노드로 대용량 그래디언트를 동시에 전송하면 스위치 큐가 즉시 가득 차고 패킷 유실이 발생합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>하드웨어 재전송 폭풍:</strong> InfiniBand/RoCE 프로토콜은 원래 무손실 네트워크를 가정하므로, 단 1개의 패킷만 유실되어도 송신 카드가 해당 시점 이후의 모든 패킷을 재전송하는 <strong>Go-Back-N 재전송 폭풍</strong>을 유발합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>TCP 폴백 또는 타임아웃:</strong> 지연 시간이 500us 이상으로 급증하고, 유실이 누적될 경우 RDMA 연결이 끊겨 커널 TCP 스택으로 폴백되거나 학습 세션이 강제 종료됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 징후:</strong> 스위치 인터페이스 카운터에서 PFC PAUSE 프레임은 전혀 보이지 않고, \`rx_dropped\` 및 \`rx_out_of_buffer\` 카운터만 초당 수만 건씩 증가합니다.</li>
+        </ul>
+      `
+    },
+    lossless: {
+      console: `# SRE Diagnostics - Healthy RoCEv2 Network WITH PFC & ECN (Lossless Ethernet)
+# 1. Verify priority pause frames are operating correctly
+$ ethtool -S eth0 | grep -E "priority_pause|dropped"
+rx_priority_pause_packets: 489201 <span class="console-highlight">(Switch PFC PAUSE Received)<span class="console-tooltip">rx_priority_pause_packets: 다운스트림 스위치 혼잡 시 소스 NIC에 PAUSE 프레임을 성공적으로 보내 임시로 데이터를 멈추게 함으로써 패킷 드랍을 원천 차단합니다.</span></span>
+tx_priority_pause_packets: 12053
+rx_dropped_packets: 0 <span class="console-highlight">(Zero Packet Drop)<span class="console-tooltip">rx_dropped_packets: PFC가 동작하여 스위치 버퍼 오버플로우가 발생하지 않으므로 패킷 드랍이 0으로 유지됩니다.</span></span>
+
+# 2. Check ECN DCQCN Congestion Notification Packet (CNP) counters
+$ cat /sys/class/infiniband/mlx5_0/ports/1/hw_counters/np_cnp_sent
+np_cnp_sent: 82401 <span class="console-highlight">(ECN CNP Transmitted)<span class="console-tooltip">np_cnp_sent: 스위치 큐가 임계값을 초과했을 때 IP 헤더의 ECN 비트를 마킹하여 목적지에 알리고, 목적지 NIC는 소스 NIC에 Congestion Notification Packet(CNP)을 보내 송신 속도를 정밀하게 제어합니다.</span></span>
+$ cat /sys/class/infiniband/mlx5_0/ports/1/hw_counters/rp_cnp_handled
+rp_cnp_handled: 82401
+
+# 3. RDMA performance status - Full speed, low latency
+$ ibv_rc_pingpong -d mlx5_0 -i 1 -g 0 10.10.10.2
+  port=1, ib_port=1, lid=0, dlid=0, qpn=124, psn=402, rkey=0x1800c
+  8192000 bytes in 0.16 seconds = <span class="console-highlight">40.96 GB/sec</span>
+  Latency: <span class="console-highlight">0.82 us</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-check" style="color: #10b981; margin-right: 6px;"></i><strong>Lossless Ethernet 및 PFC/ECN 흐름 제어</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>우선순위 기반 흐름 제어 (PFC):</strong> 이더넷 링크 전체가 아닌, RDMA용 특정 우선순위 큐(CoS)에만 802.1Qbb PAUSE 프레임을 전송하여 혼잡 구간 백프레셔(Backpressure)를 제어하고 패킷 드랍을 예방합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>명시적 혼잡 통보 (ECN/DCQCN):</strong> 스위치 버퍼가 가득 차기 전에 패킷의 IP DSCP ECN 비트를 마킹하여 목적지에 알립니다. 목적지 NIC가 이를 감지하면 즉시 송신 NIC로 CNP 패킷을 보내 송신 속도를 감속(Rate Limiting)해 PFC PAUSE 동작 자체를 예방합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>데드락 방지 (PFC Deadlock Prevention):</strong> PFC가 다수의 스위치에 걸쳐 활성화될 때 순환 대기 상태로 인해 전체 스위치 전송이 멈추는 데드락(PFC Deadlock)을 감지하고 해제하는 타이머 설정(예: Switch Deadlock Detection)이 필수적입니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 참고 사항:</strong> 최상급 클러스터에서는 ECN 임계치를 세밀하게 조절하여 PFC PAUSE 프레임이 거의 발생하지 않도록 감속 제어(DCQCN)하는 것을 튜닝 목표로 잡습니다.</li>
+        </ul>
+      `
+    }
+  };
+
+  const vastSimData = {
+    buggy: {
+      console: `# Production Incident: Ubuntu NFS Client IO Fragmentation (kernel bug)
+# 1. IO performance monitoring showing high IOPS but collapsed throughput
+$ iostat -xz 1 nvme0n1
+Device:         rrqm/s   wrqm/s     r/s     w/s    rMB/s    wMB/s avgrq-sz avgqu-sz  await  %util
+nvme0n1           0.00     0.00    0.00  <span class="console-highlight">120000.00</span>    0.00   <span class="console-highlight">1171.88</span>     20.0     94.5   0.78  <span class="console-highlight">98.5%</span>
+<span class="console-tooltip">iostat: 120,000 IOPS(쓰기 횟수)가 발생하고 있음에도 처리량(Throughput)은 1.1GB/s에 머물고 있습니다. 디스크 및 네트워크 인터페이스 사용량(%util)은 이미 포화 상태입니다.</span>
+
+# 2. Track NFS write packet sizes from kernel tracing
+$ mountstats | grep -A 4 "WRITE:"
+  WRITE: 4801932 ops <span class="console-highlight">avg bytes per write: 4096 (4KB)</span>
+<span class="console-tooltip">avg bytes per write: 앱에서는 64MB 파일 순차 쓰기를 요청했으나, OS NFS 클라이언트 버그로 인해 페이지 캐시가 4KB 크기로 갈기갈기 쪼개져 VAST로 유입되고 있습니다.</span>
+
+# 3. Storage controller CPU / Queue saturation
+$ vast_cli show controllers active_queries
+Controller  CPU_Usage  Queue_Depth  Connected_NFS_Clients  Status
+cntrl-01        <span class="console-highlight">98.2%</span>         2048                    48  Degraded (IOPS Saturated)
+cntrl-02        <span class="console-highlight">97.8%</span>         1990                    48  Degraded (IOPS Saturated)`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation" style="color: #ef4444; margin-right: 6px;"></i><strong>Linux Kernel NFS Client Fragmentation Bug 원인</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>현상 요약:</strong> 인공지능 학습 체크포인트 저장 시 대량의 64MB~512MB 순차 IO 쓰기를 실행했으나, 스토리지 대역폭이 40GB/s에서 1.2GB/s로 1/30 토막 나며 GPU 노드가 모두 대기 상태에 빠진 장애입니다.</li>
+          <li style="margin-bottom: 6px;"><strong>근본 원인 (OS 커널 버그):</strong> 특정 우분투 커널 버전의 NFS Client 라이터 엔진이 대량 순차 입출력을 처리할 때 페이지 캐시 플러시(Dirty Page Writeback) 과정에서 커널이 지정된 쓰기 사이즈(wsize=1M)를 무시하고 <strong>NFS 요청을 4KB 블록으로 파편화(Fragmentation)</strong>하여 스토리지로 보냈습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>성능 미치는 영향:</strong> 스토리지 컨트롤러 입장에서는 거대한 하나의 순차 파일 쓰기가 아닌, 12만 번의 무작위 4KB 메타데이터/블록 쓰기 요청이 몰린 것과 같으므로 파일 잠금 및 CPU 인터럽트 폭증으로 인프라 전체의 IOPS 임계치가 포화되었습니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 모니터링:</strong> 대역폭(Throughput)이 나오지 않는데 IOPS 카운터가 비정상적으로 높고, 스토리지 컨트롤러 CPU가 95% 이상 치솟는다면 즉시 파일 시스템 마운트 통계와 OS 계층의 데이터 파편화 여부를 프로파일링해야 합니다.</li>
+        </ul>
+      `
+    },
+    vast_enhanced: {
+      console: `# Fixed State: VAST Driver Client-side Reassembly Mode (Workaround)
+# 1. IO performance monitoring shows low IOPS and high bandwidth
+$ iostat -xz 1 nvme0n1
+Device:         rrqm/s   wrqm/s     r/s     w/s    rMB/s    wMB/s avgrq-sz avgqu-sz  await  %util
+nvme0n1           0.00  32000.00    0.00    <span class="console-highlight">625.00</span>    0.00  <span class="console-highlight">40000.00</span>  131072.0      1.1   1.80  <span class="console-highlight">12.4%</span>
+<span class="console-tooltip">iostat: VAST 드라이버가 파편화된 IO를 클라이언트 사이드 단에서 다시 병합하여 내보냄으로써, IOPS는 625회로 극적으로 내려갔고 쓰기 대역폭은 40.0 GB/s 최대치에 도달하였습니다.</span>
+
+# 2. Verify coalesced NFS write sizes
+$ mountstats | grep -A 4 "WRITE:"
+  WRITE: 2401 ops <span class="console-highlight">avg bytes per write: 67108864 (64MB)</span>
+<span class="console-tooltip">avg bytes per write: 우분투 커널이 4KB로 쪼갠 데이터를 VAST 클라이언트 드라이버가 가로채어 원래 크기인 64MB 대형 시퀀셜 데이터로 조립(Reassembly)한 후 VAST 컨트롤러로 전달합니다.</span>
+
+# 3. Storage controller health returns to optimal
+$ vast_cli show controllers active_queries
+Controller  CPU_Usage  Queue_Depth  Connected_NFS_Clients  Status
+cntrl-01        <span class="console-highlight">12.1%</span>            8                    48  Optimal
+cntrl-02        <span class="console-highlight">11.8%</span>            9                    48  Optimal`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-check" style="color: #10b981; margin-right: 6px;"></i><strong>VAST 클라이언트 단 Reassembly 오프로드 우회 기법</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>임시 우회 필요성:</strong> 수천 대의 GPU 노드 OS 커널 버전을 동시에 업데이트하고 노드를 재부팅하는 작업은 수주가 걸리므로, 즉각적인 서비스 가용성 확보를 위해 VAST 클라이언트 파일시스템 모듈단에서 수정 패치를 적용했습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>클라이언트 단 병합 (NFS Coalescing):</strong> 드라이버 내 커스텀 메모리 링 버퍼를 활용해 커널 단에서 쪼개진 4KB 쓰기 IO들을 다시 결합하여 스토리지 프로토콜이 지원하는 최대 크기인 64MB 이상의 거대한 패킷으로 조립하여 물리 네트워크 인터페이스로 발송합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>스토리지 성능 복원:</strong> 스토리지의 IOPS가 1/200로 급감하고 하드웨어 병목이 해소되어 SSD의 고속 순차 쓰기 대역폭(40 GB/s)이 100% 정상 발휘됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>장기 해결책 (SRE 권장):</strong> GPU 인프라 전 노드의 OS 우분투 버그가 해결된 최신 LTS 커널로 롤링 업데이트 일정을 수립하고 배포 체크리스트를 정렬하는 장기 티켓을 연계하여 최종 조치를 완료합니다.</li>
+        </ul>
+      `
+    }
+  };
+
+  const clusterSimData = {
+    single: {
+      console: `# Slurm Job Scheduler - Single Node Resource Allocation (gpu01)
+$ sbatch --nodes=1 --gpus=8 --job-name=single-node-training run_job.sh
+Submitted batch job 892014
+
+# 1. Slurm Controller Job Status
+$ squeue --job 892014
+  JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+ 892014   h100-8g single-n    yg-ai  R       0:12      1 gpu01
+
+# 2. Mount VAST Storage and Load training dataset
+$ df -h | grep /vast
+10.20.10.10:/share   8.2P   3.1P   5.1P  38% /mnt/vast_data
+$ python3 -c "import time; print('Loading dataset (120GB) to GPU memory...')"
+Dataset loaded successfully in 3.1 seconds over NFS.
+
+# 3. Intra-Node Communication - NVLink Sync Active
+$ nvidia-smi topo -m
+        GPU0  GPU1  GPU2  GPU3  GPU4  GPU5  GPU6  GPU7  NIC0
+GPU0     X    NV8   NV8   NV8   NV8   NV8   NV8   NV8   PIX
+GPU1    NV8    X    NV8   NV8   NV8   NV8   NV8   NV8   PIX
+<span class="console-highlight">NVLink status: P2P Active, bandwidth: 900 GB/s per GPU</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-server" style="color: #0ea5e9; margin-right: 6px;"></i><strong>단일 노드 분산 학습 아키텍처 및 통신 특성</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>자원 스케줄링:</strong> Slurm이 단일 물리 서버인 \`gpu01\` 노드를 점유 할당하고, 서버 내부의 8개 NVIDIA H100 Tensor Core GPU를 할당합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>데이터 파이프라인 병목:</strong> 단일 노드 학습 시에는 VAST 스토리지와 호스트 간 400G LACP 네트워크 대역폭으로도 충분하여, 병렬 NFS 마운트 수준에서 학습 데이터셋 로드가 수초 내로 완료됩니다.</li>
+          <li style="margin-bottom: 6px;"><strong>내부 고속 통신 (NVLink):</strong> GPU 상호 간 가중치(Gradient) 동기화 시, 네트워크 스위치를 거치지 않고 보드 내 탑재된 NVSwitch 칩셋과 <strong>NVLink (양방향 900 GB/s)</strong> 버스를 통하므로 통신 지연 시간이 거의 없습니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 진단 지점:</strong> 단일 노드 학습 시에는 외부 네트워크 혼잡이나 패킷 드랍이 연산 성능에 미치는 영향이 극히 낮으며, 주로 로컬 GPU 온도 제어 및 PCIe 가속 디바이스 정상 여부가 핵심입니다.</li>
+        </ul>
+      `
+    },
+    four: {
+      console: `# Slurm Job Scheduler - Multi-Node Cluster Resource Allocation (gpu01-04)
+$ sbatch --nodes=4 --gpus=32 --job-name=llm-pretrain run_job.sh
+Submitted batch job 892015
+
+# 1. Slurm Controller Job Status (Multi-Node allocated)
+$ squeue --job 892015
+  JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+ 892015   h100-8g llm-pret    yg-ai  R       0:04      4 gpu[01-04]
+
+# 2. Multi-node NCCL Environment Initialization (RDMA Ring Topology)
+$ export NCCL_DEBUG=INFO
+$ export NCCL_IB_DISABLE=0  # Enable RDMA InfiniBand/RoCE
+$ python3 -m torch.distributed.run --nproc_per_node=8 --nnodes=4 main.py
+[gpu01:10204] NCCL INFO Bootstrap : Found ethernet interface eth0 (RoCEv2)
+[gpu01:10204] <span class="console-highlight">NCCL INFO Ring 00 : gpu01(0) -> gpu02(1) -> gpu03(2) -> gpu04(3) -> gpu01(0) via RDMA [RoCEv2]</span>
+[gpu01:10204] NCCL INFO Using GPUDirect RDMA (GDR) - Direct GPU-to-NIC Memory Access
+
+# 3. Inter-Node Communication status - NCCL AllReduce synchronizing gradients
+$ watch -n 1 nvidia-smi dmon -s u
+#GPU   pwr  temp    sm   mem   enc   dec  mclk  pclk
+   0   680W  62C   94%   88%    0%    0%  3200  1820
+   1   675W  60C   94%   88%    0%    0%  3200  1820
+<span class="console-highlight">GPU SM active: 94% | NCCL Inter-Node RDMA Sync Bandwidth: 3.2 Tbps (8x 400G NICs active)</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-nodes" style="color: #8b5cf6; margin-right: 6px;"></i><strong>다중 노드 대규모 분산 학습 아키텍처 및 통신 병목</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>분산 학습 통신 (NCCL):</strong> 수십/수백 대의 노드가 파라미터를 동기화할 때는 <strong>NCCL(NVIDIA Collective Communications Library)</strong>이 생성한 가상의 링(Ring) 또는 트리(Tree) 네트워크 구조를 사용해 AllReduce 분산 합산 연산을 실행합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>GPUDirect RDMA (GDR):</strong> 호스트 CPU 메모리를 경유하지 않고, GPU HBM 메모리 내 가중치를 PCIe 버스를 통해 NIC(ConnectX-7)로 직접 보낸 후 스위치를 거쳐 상대 GPU로 고속 전송합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>레일-최적화 네트워크 (Rail-Optimized Topology):</strong> 동일한 인덱스를 가진 GPU끼리 전용 스위치 플레인에 맵핑(예: GPU 0번은 Leaf Switch A, GPU 1번은 Leaf Switch B)하여 스위치 간 통신 충돌(Congestion)을 피하고 대역폭을 선형적으로 스케일링합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 진단 지점:</strong> 다중 노드 통신에서는 단 하나의 NIC 또는 스위치 인터페이스에만 패킷 유실이나 PFC 데드락이 걸려도 전체 클러스터(32개 GPU 전체) 연산 속도가 가장 느린 장비의 속도로 하향 포화되는 '최약체 병목(Straggler)' 현상이 빈발합니다.</li>
+        </ul>
+      `
+    }
+  };
+
   const OVERVIEW_DATA = {
     // --- Linux Troubleshooting Scenarios ---
     "linux-q01-server-slow": {
@@ -3623,6 +3810,228 @@ $ df -h /dev/sda1
           </div>
         </div>
       `;
+    } else if (doc.id === 'gpu-q02-roce') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-bolt" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          RoCE Lossless Ethernet & PFC Simulator (RoCE 무손실 이더넷 및 흐름제어 시뮬레이터)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          <!-- Visual diagram row -->
+          <div class="dns-nodes-diagram" id="roceNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 180px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; transition: all 0.3s ease;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="roceStepGrid" style="grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="lossless" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: #10b981; text-transform: uppercase;">Lossless Mode (PFC/ECN ON)</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-shield-halved" style="margin-right:4px;"></i>무손실 네트워크 (PFC/ECN 활성화)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">PFC Pause frames, ECN DCQCN, 0 Drops, 40GB/s</div>
+            </div>
+            <div class="cpu-dial-card" data-step="lossy" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: #ef4444; text-transform: uppercase;">Lossy Mode (PFC/ECN OFF)</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-triangle-exclamation" style="margin-right:4px;"></i>일반 이더넷 (PFC/ECN 비활성화)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Switch buffer overflow, Packet drops, Go-Back-N, TCP fallback</div>
+            </div>
+          </div>
+          
+          <!-- Stats Panel -->
+          <div style="display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;">
+            <div style="flex: 1 1 200px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: hsl(var(--accent));"><i class="fa-solid fa-gauge-high"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Throughput (대역폭)</div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                  <div style="flex-grow: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden;">
+                    <div id="roceTputBar" style="width: 100%; height: 100%; background: #10b981; transition: all 0.5s ease;"></div>
+                  </div>
+                  <span id="roceTputVal" style="font-size: 0.85rem; font-family: var(--font-mono); font-weight: bold; width: 60px; text-align: right;">40.0 GB/s</span>
+                </div>
+              </div>
+            </div>
+            <div style="flex: 1 1 200px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #f59e0b;"><i class="fa-solid fa-stopwatch"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Network Latency (네트워크 지연)</div>
+                <div id="roceLatencyVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #10b981; margin-top: 2px;">0.82 μs</div>
+              </div>
+            </div>
+            <div style="flex: 1 1 200px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #ef4444;"><i class="fa-solid fa-circle-exclamation"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Packet Drops (패킷 유실)</div>
+                <div id="roceDropVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #10b981; margin-top: 2px;">0 (Zero Drop)</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="roceTerminalTitle"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i>SRE Diagnostics Terminal Console</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 200px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="roceConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">네트워크 혼잡 제어 및 예방 원리</span></div>
+                <div class="card-body" id="roceAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (doc.id === 'gpu-q03-vast-storage') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-database" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          NFS client Write Fragmentation & Reassembly Simulator (NFS 쓰기 파편화 및 병합 시뮬레이터)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          <!-- Visual flow diagram -->
+          <div class="dns-nodes-diagram" id="vastNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; transition: all 0.3s ease;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="vastStepGrid" style="grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="vast_enhanced" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: #10b981; text-transform: uppercase;">VAST Client Driver (Coalesced 64MB)</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-puzzle-piece" style="margin-right:4px;"></i>VAST 드라이버 병합 모드 (64MB)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Client-side merge, 625 IOPS, 40GB/s, CPU 12%</div>
+            </div>
+            <div class="cpu-dial-card" data-step="buggy" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: #ef4444; text-transform: uppercase;">Buggy OS Kernel (Fragmented 4KB)</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-scissors" style="margin-right:4px;"></i>OS 버그 파편화 모드 (4KB 분할)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Ubuntu Writeback Bug, 120,000 IOPS, 1.2GB/s, CPU 98%</div>
+            </div>
+          </div>
+          
+          <!-- Stats Panel -->
+          <div style="display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;">
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #ef4444;"><i class="fa-solid fa-arrow-up-right-from-square"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Storage IOPS</div>
+                <div id="vastIopsVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #10b981; margin-top: 2px;">625 IOPS</div>
+              </div>
+            </div>
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #f59e0b;"><i class="fa-solid fa-microchip"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Controller CPU load</div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                  <div style="flex-grow: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden;">
+                    <div id="vastCpuBar" style="width: 12%; height: 100%; background: #10b981; transition: all 0.5s ease;"></div>
+                  </div>
+                  <span id="vastCpuVal" style="font-size: 0.85rem; font-family: var(--font-mono); font-weight: bold; width: 45px; text-align: right;">12.1%</span>
+                </div>
+              </div>
+            </div>
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: hsl(var(--accent));"><i class="fa-solid fa-gauge-high"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Throughput</div>
+                <div id="vastTputVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #10b981; margin-top: 2px;">40.0 GB/s</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i>iostat & mountstats Performance Terminal</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 200px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="vastConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">OS 파편화 기전 및 VAST 드라이버 RCA</span></div>
+                <div class="card-body" id="vastAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (doc.id === 'gpu-q04-gpu-cluster-architecture') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-server" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          GPU Cluster Topology & Slurm Scheduler Explorer (GPU 클러스터 위상 구조 및 스케줄러 탐색기)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          
+          <!-- Slurm control header -->
+          <div style="display:flex; justify-content: space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px; background: rgba(0,0,0,0.15); border: 1px solid var(--border-color); padding: 12px 18px; border-radius: 8px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-size:0.8rem; font-weight:bold; color:var(--text-secondary); text-transform:uppercase;">Slurm Job Size:</span>
+              <button class="tab-btn active" id="clusterJobBtnSingle" style="padding: 4px 12px; font-size:0.8rem; border-radius:4px; margin:0;">1-Node (8x H100)</button>
+              <button class="tab-btn" id="clusterJobBtnFour" style="padding: 4px 12px; font-size:0.8rem; border-radius:4px; margin:0;">4-Node Cluster (32x H100)</button>
+            </div>
+            
+            <button id="clusterRunJobBtn" style="background: hsl(var(--accent)); color: white; border: none; border-radius: 6px; padding: 8px 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: background 0.2s;">
+              <i class="fa-solid fa-play"></i> Run Slurm Job (작업 실행)
+            </button>
+          </div>
+          
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%; display:flex; flex-direction:column; gap:16px;">
+              <!-- Interactive topology diagram container -->
+              <div id="clusterTopologyDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); min-height: 280px; position: relative; display: flex; flex-direction: column; justify-content: space-between; align-items: center; overflow: hidden;">
+                 <!-- Populated dynamically -->
+              </div>
+              
+              <!-- Console Log Panel -->
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i>Slurm Allocator & PyTorch Distributed Console</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 140px; padding: 12px; position:relative; overflow: visible;">
+                  <pre><code id="clusterConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.8rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px; display:flex; flex-direction:column; gap:16px;">
+              <!-- Hardware Details Panel -->
+              <div class="study-card" style="margin-bottom:0; flex-grow:1;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default" id="clusterDetailsTitle"><i class="fa-solid fa-microchip" style="margin-right:6px;"></i>Component Hardware Specs</span></div>
+                <div class="card-body" id="clusterDetailsBody" style="line-height:1.6; font-size:0.85rem; padding: 18px; min-height:160px;">
+                  <p style="color:var(--text-secondary); text-align:center; padding-top:40px;"><i class="fa-solid fa-arrow-pointer" style="display:block; font-size:2rem; margin-bottom:12px; color:hsl(var(--accent));"></i>토폴로지 다이어그램 내 컴포넌트(Compute Node, Switch, VAST Storage)를 클릭하여 상세 하드웨어 스펙을 조회하세요.</p>
+                </div>
+              </div>
+              
+              <!-- SRE Analysis Notes -->
+              <div class="study-card" style="margin-bottom:0; flex-grow:1;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">클러스터 분산 환경 통신 및 구조 분석</span></div>
+                <div class="card-body" id="clusterAnalysisText" style="line-height:1.6; font-size:0.85rem; padding: 18px;">
+                  <!-- Populated dynamically -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     // Accordion: Interviewer's Intent
@@ -3723,7 +4132,7 @@ $ df -h /dev/sda1
       });
     }
 
-    // BIND SIMULATOR LOGIC FOR gpu-q01-rdma-vs-tcp
+    // BIND SIMULATOR LOGIC FOR ALL GPU QUESTIONS
     if (doc.id === 'gpu-q01-rdma-vs-tcp') {
       const gpuStepCards = document.querySelectorAll('#gpuStepGrid .cpu-dial-card');
       const gpuConsoleOutput = document.getElementById('gpuConsoleOutput');
@@ -3891,6 +4300,493 @@ $ df -h /dev/sda1
 
       // Initialize simulator with first step
       updateGpuSimulator('tcp');
+    } else if (doc.id === 'gpu-q02-roce') {
+      const roceStepCards = document.querySelectorAll('#roceStepGrid .cpu-dial-card');
+      const roceConsoleOutput = document.getElementById('roceConsoleOutput');
+      const roceAnalysisText = document.getElementById('roceAnalysisText');
+      const roceNodesDiagram = document.getElementById('roceNodesDiagram');
+      const roceTerminalTitle = document.getElementById('roceTerminalTitle');
+      const roceTputBar = document.getElementById('roceTputBar');
+      const roceTputVal = document.getElementById('roceTputVal');
+      const roceLatencyVal = document.getElementById('roceLatencyVal');
+      const roceDropVal = document.getElementById('roceDropVal');
+
+      function updateRoceDiagram(modeKey) {
+        let diagramHTML = '';
+        if (modeKey === 'lossless') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: nowrap; position: relative;">
+              <!-- Source Host -->
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 8px 12px; width: 120px; text-align: center;">
+                  <div style="font-size:0.7rem; color:var(--text-secondary); font-weight:bold;">GPU Sender</div>
+                  <div style="font-size:0.85rem; font-weight:800; color:#10b981;">mlx5_0 (NIC)</div>
+                </div>
+                <div style="font-size:0.65rem; color:#10b981; font-weight:bold;"><i class="fa-solid fa-circle-check"></i> PFC Configured</div>
+              </div>
+
+              <!-- Transit Link with Switch Queue -->
+              <div style="flex-grow: 1; display: flex; align-items: center; position: relative; height: 80px;">
+                <!-- Link line -->
+                <div style="width: 100%; height: 6px; background: #10b981; border-radius: 3px; position: relative; display: flex; align-items: center;">
+                  <!-- Streaming packet dots -->
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; transform: translateY(-50%); box-shadow: 0 0 8px #10b981;"></div>
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; transform: translateY(-50%); animation-delay: 0.5s; box-shadow: 0 0 8px #10b981;"></div>
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; transform: translateY(-50%); animation-delay: 1s; box-shadow: 0 0 8px #10b981;"></div>
+                </div>
+                
+                <!-- Congested Switch queue in the middle -->
+                <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; z-index: 10;">
+                  <div style="background: #1e293b; border: 2px solid #f59e0b; border-radius: 6px; width: 64px; height: 50px; display: flex; flex-direction: column; justify-content: flex-end; padding: 3px; gap: 2px; overflow: hidden; position: relative;">
+                    <div style="position: absolute; top: 2px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #f59e0b; font-weight: bold; white-space: nowrap;">SWITCH QUEUE</div>
+                    <div style="height: 10px; background: #f59e0b; border-radius: 2px;"></div>
+                    <div style="height: 10px; background: #f59e0b; border-radius: 2px;"></div>
+                    <div style="height: 10px; background: #f59e0b; border-radius: 2px; animation: pulseEstablished 1s infinite;"></div>
+                  </div>
+                  <!-- ECN marker -->
+                  <div style="background: #ef4444; color: white; font-size: 0.55rem; padding: 1px 4px; border-radius: 3px; font-weight: bold; margin-top: 4px; border: 1px solid #1e293b; animation: pulseEstablished 1s infinite;">ECN MARKED</div>
+                </div>
+
+                <!-- Backpressure wave from switch to sender -->
+                <div class="pfc-pause-wave" style="position: absolute; left: 25%; top: 50%; transform: translate(-50%, -50%); width: 24px; height: 24px; border: 2px solid #f59e0b; border-radius: 50%;"></div>
+                <div style="position: absolute; left: 15%; top: 12px; font-size: 0.6rem; color: #f59e0b; font-weight: bold; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid var(--border-color);"><i class="fa-solid fa-hand"></i> PFC PAUSE (P3)</div>
+              </div>
+
+              <!-- Destination Host -->
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 8px 12px; width: 120px; text-align: center;">
+                  <div style="font-size:0.7rem; color:var(--text-secondary); font-weight:bold;">GPU Receiver</div>
+                  <div style="font-size:0.85rem; font-weight:800; color:#10b981;">mlx5_0 (NIC)</div>
+                </div>
+                <div style="font-size:0.65rem; color:#10b981; font-weight:bold;"><i class="fa-solid fa-circle-check"></i> ECN Active</div>
+              </div>
+            </div>
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#10b981; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-circle-info"></i> PFC/ECN Co-operation: ECN marks IP header to throttle sender speed, while PFC PAUSE acts as a hard stop to prevent any packet drops.
+            </div>
+          `;
+        } else {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: nowrap; position: relative;">
+              <!-- Source Host -->
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                <div style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 8px; padding: 8px 12px; width: 120px; text-align: center;">
+                  <div style="font-size:0.7rem; color:var(--text-secondary); font-weight:bold;">GPU Sender</div>
+                  <div style="font-size:0.85rem; font-weight:800; color:#ef4444;">mlx5_0 (NIC)</div>
+                </div>
+                <div style="font-size:0.65rem; color:#ef4444; font-weight:bold;"><i class="fa-solid fa-triangle-exclamation"></i> Retransmitting (GBN)</div>
+              </div>
+
+              <!-- Transit Link with Switch Queue -->
+              <div style="flex-grow: 1; display: flex; align-items: center; position: relative; height: 80px;">
+                <!-- Link line -->
+                <div style="width: 100%; height: 6px; background: #ef4444; border-radius: 3px; position: relative; display: flex; align-items: center;">
+                  <!-- Dropping packets -->
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #ef4444; border-radius: 50%; position: absolute; top: 50%; transform: translateY(-50%); box-shadow: 0 0 8px #ef4444;"></div>
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #ef4444; border-radius: 50%; position: absolute; top: 50%; transform: translateY(-50%); animation-delay: 0.4s; box-shadow: 0 0 8px #ef4444;"></div>
+                </div>
+                
+                <!-- Congested Switch queue overflowing -->
+                <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; z-index: 10;">
+                  <div style="background: #1e293b; border: 2px solid #ef4444; border-radius: 6px; width: 64px; height: 50px; display: flex; flex-direction: column; justify-content: flex-end; padding: 3px; gap: 2px; overflow: visible; position: relative;">
+                    <div style="position: absolute; top: 2px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #ef4444; font-weight: bold; white-space: nowrap;">SWITCH OVERFLOW</div>
+                    <div style="height: 10px; background: #ef4444; border-radius: 2px;"></div>
+                    <div style="height: 10px; background: #ef4444; border-radius: 2px;"></div>
+                    <div style="height: 10px; background: #ef4444; border-radius: 2px;"></div>
+                    <!-- Drop indicator -->
+                    <div style="position: absolute; top: -20px; right: -20px; background: #ef4444; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: bold; border: 2px solid #1e293b; animation: pulseEstablished 0.8s infinite;">DROP</div>
+                  </div>
+                </div>
+
+                <!-- Retransmission Loop feedback -->
+                <div style="position: absolute; left: 15%; top: 12px; font-size: 0.6rem; color: #ef4444; font-weight: bold; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid var(--border-color);"><i class="fa-solid fa-arrows-spin"></i> Go-Back-N Retransmit</div>
+              </div>
+
+              <!-- Destination Host -->
+              <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                <div style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 8px; padding: 8px 12px; width: 120px; text-align: center;">
+                  <div style="font-size:0.7rem; color:var(--text-secondary); font-weight:bold;">GPU Receiver</div>
+                  <div style="font-size:0.85rem; font-weight:800; color:#ef4444;">mlx5_0 (NIC)</div>
+                </div>
+                <div style="font-size:0.65rem; color:#ef4444; font-weight:bold;"><i class="fa-solid fa-triangle-exclamation"></i> TCP Fallback Socket</div>
+              </div>
+            </div>
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#ef4444; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-triangle-exclamation"></i> Network Failure: No PFC flow control causes packet drops. RDMA drops connection and falls back to slow TCP or enters a hardware Go-Back-N retransmission storm.
+            </div>
+          `;
+        }
+        return diagramHTML;
+      }
+
+      function updateRoceSimulator(modeKey) {
+        const modeData = roceSimData[modeKey];
+        if (!modeData) return;
+
+        if (modeKey === 'lossless') {
+          roceTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>SRE Diagnostics - PFC/ECN ON (ethtool counters & rping)';
+          roceTputBar.style.width = '100%';
+          roceTputBar.style.background = '#10b981';
+          roceTputVal.textContent = '40.0 GB/s';
+          roceTputVal.style.color = '#10b981';
+          roceLatencyVal.textContent = '0.82 μs (microsecond)';
+          roceLatencyVal.style.color = '#10b981';
+          roceDropVal.textContent = '0 (Zero Drop)';
+          roceDropVal.style.color = '#10b981';
+        } else {
+          roceTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>SRE Diagnostics - PFC/ECN OFF (packet drops & fallback)';
+          roceTputBar.style.width = '1%';
+          roceTputBar.style.background = '#ef4444';
+          roceTputVal.textContent = '0.4 GB/s';
+          roceTputVal.style.color = '#ef4444';
+          roceLatencyVal.textContent = '540 μs (heavy retransmission)';
+          roceLatencyVal.style.color = '#ef4444';
+          roceDropVal.textContent = '148,203 drops';
+          roceDropVal.style.color = '#ef4444';
+        }
+
+        roceNodesDiagram.innerHTML = updateRoceDiagram(modeKey);
+        roceConsoleOutput.innerHTML = modeData.console;
+        roceAnalysisText.innerHTML = modeData.analysis;
+      }
+
+      roceStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          roceStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+          
+          const modeKey = card.dataset.step;
+          updateRoceSimulator(modeKey);
+        });
+      });
+
+      // Initialize
+      updateRoceSimulator('lossless');
+    } else if (doc.id === 'gpu-q03-vast-storage') {
+      const vastStepCards = document.querySelectorAll('#vastStepGrid .cpu-dial-card');
+      const vastConsoleOutput = document.getElementById('vastConsoleOutput');
+      const vastAnalysisText = document.getElementById('vastAnalysisText');
+      const vastNodesDiagram = document.getElementById('vastNodesDiagram');
+      const vastIopsVal = document.getElementById('vastIopsVal');
+      const vastCpuBar = document.getElementById('vastCpuBar');
+      const vastCpuVal = document.getElementById('vastCpuVal');
+      const vastTputVal = document.getElementById('vastTputVal');
+
+      function updateVastDiagram(modeKey) {
+        let diagramHTML = '';
+        if (modeKey === 'vast_enhanced') {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; flex-direction: column; gap: 12px; align-items: center; position: relative;">
+              <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; position: relative; gap: 8px;">
+                <!-- Application Layer -->
+                <div style="display: flex; flex-direction: column; align-items: center; width: 120px;">
+                  <div style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 8px; padding: 6px 10px; width: 100%; text-align: center; font-size:0.75rem; font-weight:bold; color:var(--text-primary);">
+                    PyTorch App
+                  </div>
+                  <div style="font-size: 0.65rem; color: #0ea5e9; font-weight: bold; margin-top: 4px;">64MB Sequential IO</div>
+                </div>
+
+                <!-- OS / Driver Layer -->
+                <div style="display: flex; flex-direction: column; align-items: center; width: 140px; position: relative;">
+                  <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 6px 10px; width: 100%; text-align: center; font-size:0.75rem; font-weight:bold; color:#10b981; position: relative; z-index: 5;">
+                    VAST Client Driver
+                  </div>
+                  <div style="font-size: 0.6rem; color: #10b981; font-weight: bold; margin-top: 4px; text-align: center; line-height: 1.2;">
+                    Coalescing 4KB writes<br><i class="fa-solid fa-link"></i> Reassembled to 64MB
+                  </div>
+                </div>
+
+                <!-- Storage Controller Layer -->
+                <div style="display: flex; flex-direction: column; align-items: center; width: 120px;">
+                  <div style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 8px; padding: 6px 10px; width: 100%; text-align: center; font-size:0.75rem; font-weight:bold; color:#8b5cf6;">
+                    VAST Storage
+                  </div>
+                  <div style="font-size: 0.65rem; color: #8b5cf6; font-weight: bold; margin-top: 4px;">CPU Load: 12%</div>
+                </div>
+              </div>
+
+              <!-- Animate Large Coalesced Block Flow -->
+              <div style="width: 100%; height: 32px; background: rgba(0,0,0,0.15); border-radius: 6px; border: 1px dashed var(--border-color); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+                <div class="io-block-large" style="width: 60px; height: 16px; background: #10b981; border-radius: 4px; box-shadow: 0 0 10px #10b981; display: flex; align-items: center; justify-content: center; font-size: 0.55rem; color: white; font-weight: bold; position: absolute; left: 0;">64MB IO</div>
+              </div>
+            </div>
+          `;
+        } else {
+          diagramHTML = `
+            <div style="width: 100%; display: flex; flex-direction: column; gap: 12px; align-items: center; position: relative;">
+              <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; position: relative; gap: 8px;">
+                <!-- Application Layer -->
+                <div style="display: flex; flex-direction: column; align-items: center; width: 120px;">
+                  <div style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 8px; padding: 6px 10px; width: 100%; text-align: center; font-size:0.75rem; font-weight:bold; color:var(--text-primary);">
+                    PyTorch App
+                  </div>
+                  <div style="font-size: 0.65rem; color: #0ea5e9; font-weight: bold; margin-top: 4px;">64MB Sequential IO</div>
+                </div>
+
+                <!-- OS / Driver Layer -->
+                <div style="display: flex; flex-direction: column; align-items: center; width: 140px; position: relative;">
+                  <div style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 8px; padding: 6px 10px; width: 100%; text-align: center; font-size:0.75rem; font-weight:bold; color:#ef4444; position: relative; z-index: 5;">
+                    Ubuntu Kernel
+                  </div>
+                  <div style="font-size: 0.6rem; color: #ef4444; font-weight: bold; margin-top: 4px; text-align: center; line-height: 1.2;">
+                    NFS Writeback Bug<br><i class="fa-solid fa-scissors"></i> Chopped into 4KB
+                  </div>
+                </div>
+
+                <!-- Storage Controller Layer -->
+                <div style="display: flex; flex-direction: column; align-items: center; width: 120px;">
+                  <div style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 8px; padding: 6px 10px; width: 100%; text-align: center; font-size:0.75rem; font-weight:bold; color:#ef4444;">
+                    VAST Storage
+                  </div>
+                  <div style="font-size: 0.65rem; color: #ef4444; font-weight: bold; margin-top: 4px;">CPU Load: 98% (Saturated)</div>
+                </div>
+              </div>
+
+              <!-- Animate Tiny Fragmented Block Flow Storm -->
+              <div style="width: 100%; height: 32px; background: rgba(0,0,0,0.15); border-radius: 6px; border: 1px dashed var(--border-color); position: relative; overflow: hidden; display: flex; align-items: center;">
+                <div class="io-block-tiny" style="width: 12px; height: 12px; background: #ef4444; border-radius: 2px; box-shadow: 0 0 4px #ef4444; position: absolute; left: 0;"></div>
+                <div class="io-block-tiny" style="width: 12px; height: 12px; background: #ef4444; border-radius: 2px; box-shadow: 0 0 4px #ef4444; position: absolute; left: 0; animation-delay: 0.2s;"></div>
+                <div class="io-block-tiny" style="width: 12px; height: 12px; background: #ef4444; border-radius: 2px; box-shadow: 0 0 4px #ef4444; position: absolute; left: 0; animation-delay: 0.4s;"></div>
+                <div class="io-block-tiny" style="width: 12px; height: 12px; background: #ef4444; border-radius: 2px; box-shadow: 0 0 4px #ef4444; position: absolute; left: 0; animation-delay: 0.6s;"></div>
+                <div class="io-block-tiny" style="width: 12px; height: 12px; background: #ef4444; border-radius: 2px; box-shadow: 0 0 4px #ef4444; position: absolute; left: 0; animation-delay: 0.8s;"></div>
+                <div style="position: absolute; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #ef4444; font-weight: bold; background: #1e293b; padding: 1px 4px; border-radius: 2px; border: 1px solid var(--border-color);">120,000 IOPS Storm (4KB Requests)</div>
+              </div>
+            </div>
+          `;
+        }
+        return diagramHTML;
+      }
+
+      function updateVastSimulator(modeKey) {
+        const modeData = vastSimData[modeKey];
+        if (!modeData) return;
+
+        if (modeKey === 'vast_enhanced') {
+          vastIopsVal.textContent = '625 IOPS';
+          vastIopsVal.style.color = '#10b981';
+          vastCpuBar.style.width = '12%';
+          vastCpuBar.style.background = '#10b981';
+          vastCpuVal.textContent = '12.1%';
+          vastCpuVal.style.color = '#10b981';
+          vastTputVal.textContent = '40.0 GB/s';
+          vastTputVal.style.color = '#10b981';
+        } else {
+          vastIopsVal.textContent = '120,000 IOPS';
+          vastIopsVal.style.color = '#ef4444';
+          vastCpuBar.style.width = '98%';
+          vastCpuBar.style.background = '#ef4444';
+          vastCpuVal.textContent = '98.2%';
+          vastCpuVal.style.color = '#ef4444';
+          vastTputVal.textContent = '1.17 GB/s';
+          vastTputVal.style.color = '#ef4444';
+        }
+
+        vastNodesDiagram.innerHTML = updateVastDiagram(modeKey);
+        vastConsoleOutput.innerHTML = modeData.console;
+        vastAnalysisText.innerHTML = modeData.analysis;
+      }
+
+      vastStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          vastStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+          
+          const modeKey = card.dataset.step;
+          updateVastSimulator(modeKey);
+        });
+      });
+
+      // Initialize
+      updateVastSimulator('vast_enhanced');
+    } else if (doc.id === 'gpu-q04-gpu-cluster-architecture') {
+      const btnSingle = document.getElementById('clusterJobBtnSingle');
+      const btnFour = document.getElementById('clusterJobBtnFour');
+      const runJobBtn = document.getElementById('clusterRunJobBtn');
+      const consoleOutput = document.getElementById('clusterConsoleOutput');
+      const analysisText = document.getElementById('clusterAnalysisText');
+      const topologyDiagram = document.getElementById('clusterTopologyDiagram');
+      const detailsTitle = document.getElementById('clusterDetailsTitle');
+      const detailsBody = document.getElementById('clusterDetailsBody');
+
+      let currentJobSize = 'single';
+      let animationTimer = null;
+
+      const clusterNodeSpecs = {
+        vast: `
+          <div style="font-weight: 800; color:#8b5cf6; font-size:1rem; margin-bottom:8px;"><i class="fa-solid fa-database"></i> VAST Storage Shared Cluster</div>
+          <table style="width:100%; border-collapse:collapse; font-size:0.8rem; margin-bottom:8px;">
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Architecture</td><td style="padding:4px 0; font-weight:bold;">DASE (Disaggregated Shared Everything)</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Storage Media</td><td style="padding:4px 0; font-weight:bold;">All-Flash NVMe SSDs & Storage Class Memory (SCM)</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Protocol</td><td style="padding:4px 0; font-weight:bold;">NFS over RDMA (RoCEv2) / GPUDirect Storage (GDS)</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Clustering Link</td><td style="padding:4px 0; font-weight:bold;">400Gbps Link Aggregation (LACP)</td></tr>
+          </table>
+          <p style="color:var(--text-secondary); line-height:1.4;">VAST 스토리지는 모든 연산 노드가 단일 글로벌 파일시스템 네임스페이스를 공유하여 대량의 데이터셋 및 그래디언트 체크포인트를 병렬 RDMA 망을 통해 극도로 빠르게 읽고 쓸 수 있는 고성능 올플래시 분산 스토리지입니다.</p>
+        `,
+        switch: `
+          <div style="font-weight: 800; color:#0ea5e9; font-size:1rem; margin-bottom:8px;"><i class="fa-solid fa-network-wired"></i> 400G Leaf-Spine Switch</div>
+          <table style="width:100%; border-collapse:collapse; font-size:0.8rem; margin-bottom:8px;">
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Switch Chipset</td><td style="padding:4px 0; font-weight:bold;">NVIDIA Quantum-2 InfiniBand / Spectrum-4 Ethernet</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Bandwidth</td><td style="padding:4px 0; font-weight:bold;">64x 400Gbps Ports (Non-Blocking Routing)</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Flow Control</td><td style="padding:4px 0; font-weight:bold;">Priority Flow Control (PFC) & ECN (DCQCN) enabled</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Topology</td><td style="padding:4px 0; font-weight:bold;">Rail-Optimized GPU Cluster Flat Network</td></tr>
+          </table>
+          <p style="color:var(--text-secondary); line-height:1.4;">스위치는 대규모 GPU 인프라 전 구간에서 802.1Qbb PFC 규격과 ECN(DCQCN)을 완벽 지원하여 무손실(Lossless) 데이터 이송 경로를 제공하며, 포트 오버서브스크립션 비율이 1:1인 완전 비충돌(Non-blocking) 백플레인을 갖추고 있습니다.</p>
+        `,
+        gpu01: `
+          <div style="font-weight: 800; color:#10b981; font-size:1rem; margin-bottom:8px;"><i class="fa-solid fa-server"></i> GPU Compute Server (gpu01)</div>
+          <table style="width:100%; border-collapse:collapse; font-size:0.8rem; margin-bottom:8px;">
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">GPUs</td><td style="padding:4px 0; font-weight:bold;">8x NVIDIA H100 SXM5 80GB HBM3</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Intra-GPU Link</td><td style="padding:4px 0; font-weight:bold;">NVLink Bridge (900 GB/s bidirectional per GPU)</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">NIC Interface</td><td style="padding:4px 0; font-weight:bold;">8x Mellanox ConnectX-7 400Gbps (GPUDirect RDMA active)</td></tr>
+            <tr style="border-bottom: 1px solid var(--border-color);"><td style="padding:4px 0; color:var(--text-secondary);">Host Storage</td><td style="padding:4px 0; font-weight:bold;">Dual 200Gbps client mount for Parallel NFS</td></tr>
+          </table>
+          <p style="color:var(--text-secondary); line-height:1.4;">각 GPU 노드는 8개의 H100 가속기와 고속 ConnectX-7 어댑터가 1:1 대칭 매칭되는 Rail-Optimized 아키텍처로 구축되어 내부 가중치를 PCIe 레인을 타지 않고 NVSwitch 및 GPUDirect RDMA를 통해 원격 노드로 지연 없이 바로 전송합니다.</p>
+        `
+      };
+      clusterNodeSpecs.gpu02 = clusterNodeSpecs.gpu01.replace('gpu01', 'gpu02').replace('gpu01', 'gpu02');
+      clusterNodeSpecs.gpu03 = clusterNodeSpecs.gpu01.replace('gpu01', 'gpu03').replace('gpu01', 'gpu03');
+      clusterNodeSpecs.gpu04 = clusterNodeSpecs.gpu01.replace('gpu01', 'gpu04').replace('gpu01', 'gpu04');
+
+      function updateClusterDiagram(jobSize, animate = false) {
+        let activeNodes = (jobSize === 'four') ? ['gpu01', 'gpu02', 'gpu03', 'gpu04'] : ['gpu01'];
+        let html = `
+          <!-- Top: VAST Shared Storage -->
+          <div class="cluster-topo-node" id="node-vast" style="background: rgba(139, 92, 246, 0.1); border: 2px solid #8b5cf6; border-radius: 8px; padding: 8px 16px; width: 220px; text-align: center; cursor: pointer; transition: all 0.3s; z-index: 10;">
+            <div style="font-size:0.65rem; color:var(--text-secondary); text-transform:uppercase; font-weight:bold;">Shared Storage</div>
+            <div style="font-size:0.95rem; font-weight:800; color:#8b5cf6;"><i class="fa-solid fa-database"></i> VAST Storage Cluster</div>
+            <div style="font-size:0.6rem; color:#cbd5e1; margin-top:2px;">Click to inspect specs</div>
+          </div>
+
+          <!-- Middle: Switch -->
+          <div class="cluster-topo-node" id="node-switch" style="background: rgba(14, 165, 233, 0.1); border: 2px solid #0ea5e9; border-radius: 8px; padding: 6px 12px; width: 200px; text-align: center; cursor: pointer; transition: all 0.3s; z-index: 10; margin: 12px 0;">
+            <div style="font-size:0.65rem; color:var(--text-secondary); text-transform:uppercase; font-weight:bold;">Interconnect Network</div>
+            <div style="font-size:0.9rem; font-weight:800; color:#0ea5e9;"><i class="fa-solid fa-network-wired"></i> 400Gbps Leaf Switch</div>
+            <div style="font-size:0.6rem; color:#cbd5e1; margin-top:2px;">Click to inspect specs</div>
+          </div>
+
+          <!-- Bottom: Compute Nodes Row -->
+          <div style="display: flex; gap: 12px; width: 100%; justify-content: center; flex-wrap: wrap;">
+        `;
+
+        for (let i = 1; i <= 4; i++) {
+          const nodeId = `gpu0${i}`;
+          const isActive = activeNodes.includes(nodeId);
+          const borderStyle = isActive ? 'border: 2px solid #10b981; background: rgba(16, 185, 129, 0.1);' : 'border: 2px solid #475569; background: rgba(30, 41, 59, 0.4); opacity: 0.5;';
+          const badge = isActive ? '<span style="background:#10b981; color:white; font-size:0.55rem; padding:1px 4px; border-radius:3px; font-weight:bold;">ALLOCATED</span>' : '<span style="background:#475569; color:white; font-size:0.55rem; padding:1px 4px; border-radius:3px; font-weight:bold;">IDLE</span>';
+          
+          html += `
+            <div class="cluster-topo-node compute-node" id="node-${nodeId}" data-node="${nodeId}" style="${borderStyle} border-radius: 8px; padding: 8px; width: 110px; text-align: center; cursor: pointer; transition: all 0.3s; z-index: 10;">
+              <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:bold;">Node 0${i}</div>
+              <div style="font-size:0.85rem; font-weight:800; margin: 2px 0;">gpu0${i}</div>
+              <div style="margin-top: 4px;">${badge}</div>
+            </div>
+          `;
+        }
+
+        html += `
+          </div>
+        `;
+
+        if (animate) {
+          if (jobSize === 'single') {
+            html += `
+              <div class="active-pulse-path" style="position:absolute; width:4px; height:100px; background:linear-gradient(to bottom, #8b5cf6, #0ea5e9, #10b981); left: 30%; top: 40px; border-radius:2px; opacity:0.8; z-index:1;"></div>
+              <div style="position:absolute; bottom: 12px; left: 16%; width: 90px; height: 4px; border-bottom: 2px dashed #10b981; animation: pulseEstablished 1s infinite; z-index:2;"></div>
+            `;
+          } else {
+            html += `
+              <div class="active-pulse-path" style="position:absolute; width:4px; height:80px; background:linear-gradient(to bottom, #8b5cf6, #0ea5e9); left: 50%; top: 40px; border-radius:2px; opacity:0.8; z-index:1;"></div>
+              <div class="pulse-ring" style="position:absolute; bottom: 45px; left: 10%; right: 10%; height: 2px; background: #10b981; box-shadow: 0 0 10px #10b981; z-index:1;"></div>
+            `;
+          }
+        }
+
+        return html;
+      }
+
+      function bindNodeClicks() {
+        const nodes = topologyDiagram.querySelectorAll('.cluster-topo-node');
+        nodes.forEach(n => {
+          n.addEventListener('click', (e) => {
+            e.stopPropagation();
+            nodes.forEach(n2 => n2.classList.remove('active-highlight'));
+            n.classList.add('active-highlight');
+            
+            let key = '';
+            if (n.id === 'node-vast') key = 'vast';
+            else if (n.id === 'node-switch') key = 'switch';
+            else if (n.id.startsWith('node-gpu')) key = n.dataset.node;
+
+            if (clusterNodeSpecs[key]) {
+              detailsTitle.innerHTML = `<i class="fa-solid fa-circle-info" style="margin-right:6px;"></i>Component Details: ${key.toUpperCase()}`;
+              detailsBody.innerHTML = clusterNodeSpecs[key];
+            }
+          });
+        });
+      }
+
+      function updateClusterSimulator(jobSize, animate = false) {
+        currentJobSize = jobSize;
+        const modeData = clusterSimData[jobSize];
+        if (!modeData) return;
+
+        topologyDiagram.innerHTML = updateClusterDiagram(jobSize, animate);
+        bindNodeClicks();
+
+        consoleOutput.innerHTML = modeData.console;
+        analysisText.innerHTML = modeData.analysis;
+      }
+
+      btnSingle.addEventListener('click', () => {
+        btnSingle.classList.add('active');
+        btnFour.classList.remove('active');
+        if (animationTimer) {
+          clearInterval(animationTimer);
+          animationTimer = null;
+        }
+        updateClusterSimulator('single');
+      });
+
+      btnFour.addEventListener('click', () => {
+        btnFour.classList.add('active');
+        btnSingle.classList.remove('active');
+        if (animationTimer) {
+          clearInterval(animationTimer);
+          animationTimer = null;
+        }
+        updateClusterSimulator('four');
+      });
+
+      runJobBtn.addEventListener('click', () => {
+        runJobBtn.disabled = true;
+        runJobBtn.style.opacity = '0.6';
+        runJobBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Scheduling Job...';
+
+        consoleOutput.innerHTML = `<span style="color: #f59e0b;">$ sbatch run_job.sh --nodes=${currentJobSize === 'single' ? 1 : 4}\nScheduling resource allocation... queued.</span>`;
+
+        setTimeout(() => {
+          runJobBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Running Training Epochs...';
+          updateClusterSimulator(currentJobSize, true);
+
+          setTimeout(() => {
+            runJobBtn.disabled = false;
+            runJobBtn.style.opacity = '1';
+            runJobBtn.innerHTML = '<i class="fa-solid fa-play"></i> Run Slurm Job (작업 실행)';
+            updateClusterSimulator(currentJobSize, false);
+          }, 3500);
+        }, 1200);
+      });
+
+      // Initialize
+      updateClusterSimulator('single');
     }
 
     bindStatusSelector(doc.id);

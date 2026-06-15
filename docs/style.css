@@ -1649,3 +1649,77 @@ body.quick-recall-mode .nav-menu {
   }
 }
 
+/* --- RoCE & PFC Simulator Styles --- */
+@keyframes rippleWave {
+  0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0.8; }
+  100% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+}
+
+.pfc-pause-wave {
+  animation: rippleWave 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* --- VAST Storage NFS fragmentation Styles --- */
+@keyframes slideLargeBlock {
+  0% { left: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { left: calc(100% - 60px); opacity: 0; }
+}
+
+@keyframes slideTinyBlock {
+  0% { left: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { left: calc(100% - 12px); opacity: 0; }
+}
+
+.io-block-large {
+  animation: slideLargeBlock 2s linear infinite;
+}
+
+.io-block-tiny {
+  animation: slideTinyBlock 1.2s linear infinite;
+}
+
+/* --- GPU Cluster Topology Styles --- */
+@keyframes pulseFlowVert {
+  0% { top: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+@keyframes pulseRingFlow {
+  0% { transform: scaleX(0.1); opacity: 0.3; }
+  50% { opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0.1; }
+}
+
+.active-pulse-path {
+  animation: pulseFlowVert 1.5s linear infinite;
+}
+
+.pulse-ring {
+  animation: pulseRingFlow 2s ease-in-out infinite;
+}
+
+.cluster-topo-node {
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  border: 2px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.cluster-topo-node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 12px rgba(0, 0, 0, 0.2);
+  border-color: hsl(var(--accent)) !important;
+}
+
+.cluster-topo-node.active-highlight {
+  border-color: hsl(var(--accent)) !important;
+  box-shadow: 0 0 12px hsl(var(--accent));
+}
+
