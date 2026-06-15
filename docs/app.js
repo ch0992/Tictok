@@ -676,6 +676,64 @@ $ dmesg | tail -n 3
     }
   };
 
+  const gpuSimData = {
+    tcp: {
+      console: `# Standard BSD Socket API flow for network data exchange
+$ cat tcp_sender.c
+void send_data(int sock, char *buf, size_t size) {
+    // CPU context switch to kernel space
+    // Memory Copy 1: User buffer to Kernel Socket Buffer
+    <span class="console-highlight">write(sock, buf, size);<span class="console-tooltip">write(): 데이터를 전송하기 위한 BSD 소켓 API로, 호출 시 유저 영역에서 커널 영역으로 CPU 컨텍스트 스위칭이 유발되며 전송 버퍼로 데이터가 복사(Memory Copy 1)됩니다.</span></span>
+}
+
+# Kernel network stack serialization parameters
+$ sysctl -a | grep -E "tcp_wmem|tcp_rmem"
+net.ipv4.tcp_wmem = 4096	16384	4194304
+net.ipv4.tcp_rmem = 4096	87380	6291456
+
+# CPU load stats showing system overhead during heavy TCP I/O
+$ mpstat -P ALL 1
+CPU    %usr   <span class="console-highlight">%sys<span class="console-tooltip">%sys: OS 커널 네트워크 스택 연산(체크섬 계산, 패킷 분할, ACK 수신 대기) 및 소켓 복사 연산으로 인해 CPU 시스템 코스트가 24.8%까지 크게 치솟았습니다.</span></span>   %iowait   %idle
+all    5.20  <span class="console-highlight">24.80</span>     1.50   68.50`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #0ea5e9; margin-right: 6px;"></i><strong>TCP 전송 매커니즘 (커널 스택 및 CPU 자원 오버헤드)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>데이터 복사 오버헤드:</strong> 애플리케이션 버퍼 데이터를 커널 영역의 <strong>소켓 버퍼(Socket Buffer)</strong>로 1차 복사(CPU 복사)하고, 다시 NIC 링 버퍼로 2차 복사(DMA)하는 과정이 수반됩니다.</li>
+          <li style="margin-bottom: 6px;"><strong>CPU 간섭 및 지연:</strong> 매 전송 요청마다 유저 스페이스와 커널 스페이스 간 <strong>컨텍스트 스위칭(Context Switch)</strong>이 발생하고, CPU가 패킷 패키징 및 체크섬 연산에 동원되어 CPU 부하가 폭증합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>성능 징후:</strong> GPU 간 분산 대량 통신 시 소켓 지연 시간(Latency)이 보통 10~50마이크로초 이상 발생하여 GPU가 연산을 중단하고 데이터 동기화를 대기하는 병목이 생성됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 참고 사항:</strong> TCP 소켓 통신을 사용할 경우 CPU 코어 중 일부가 네트워킹 소프트웨어 인터럽트(softirq) 처리에 100% 포화되는 현상이 빈발합니다.</li>
+        </ul>
+      `
+    },
+    rdma: {
+      console: `# RDMA libibverbs APIs for Direct Memory Access (Kernel Bypass)
+$ cat rdma_sender.c
+// 1. Allocate Protection Domain & Register Memory Region (Zero-Copy Pinning)
+struct ibv_pd *pd = ibv_alloc_pd(context);
+struct ibv_mr *mr = <span class="console-highlight">ibv_reg_mr(pd, buf, size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);<span class="console-tooltip">ibv_reg_mr(): 송수신 버퍼 메모리 주소를 등록하고 물리 RAM 메모리에 고정(Pinning)하여, OS 페이징 아웃을 방지하고 RNIC 장치가 DMA를 통해 다이렉트로 주소를 읽고 쓸 수 있도록 가상-물리 주소를 맵핑합니다.</span></span>
+
+// 2. Post Send to Queue Pair directly bypassing OS kernel
+struct ibv_send_wr wr, *bad_wr = NULL;
+wr.wr.rdma.remote_addr = remote_addr;
+wr.wr.rdma.rkey = remote_rkey;
+<span class="console-highlight">ibv_post_send(qp, &wr, &bad_wr);<span class="console-tooltip">ibv_post_send(): OS 커널 네트워크 스택을 완전히 건너뛰고 RNIC 하드웨어의 송신 큐(Send Queue)에 직접 전송 요청(Work Request)을 등록하여 전송 속도 지연을 극단적으로 줄입니다. (Kernel Bypass)</span></span>
+
+# CPU stats show near-zero system overhead during RDMA transfer
+$ mpstat -P ALL 1
+CPU    %usr   <span class="console-highlight">%sys<span class="console-tooltip">%sys: RDMA 동작 시 데이터 이동 연산 전체가 NIC 하드웨어로 오프로드(Offloading)되어 커널 스택 점유율이 0.15% 미만으로 거의 0에 수렴합니다.</span></span>   %iowait   %idle
+all    1.10   <span class="console-highlight">0.15</span>     0.10   98.65`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #8b5cf6; margin-right: 6px;"></i><strong>RDMA 전송 매커니즘 (커널 우회 및 하드웨어 가속)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>Kernel Bypass:</strong> 애플리케이션이 libibverbs를 이용해 RNIC(RDMA NIC) 하드웨어에 직접 명령을 내리므로, 운영체제 <strong>컨텍스트 스위칭 및 네트워킹 시스템 콜이 완전히 생략</strong>됩니다.</li>
+          <li style="margin-bottom: 6px;"><strong>Zero-Copy:</strong> 사전에 주소를 등록(Memory Registration)하여 메모리 영역을 물리적으로 고정(Pinning)한 뒤, RNIC 장치 간에 PCIe DMA를 통하여 원격 메모리로 데이터를 다이렉트로 복사합니다. 커널 내 버퍼 중간 복사가 전혀 없습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>초저지연 & 고성능:</strong> RTT 네이티브 네트워크 지연 시간이 1마이크로초 미만(sub-microsecond)으로 보장되며, 분산 학습 중인 수만 개의 GPU가 대규모 그래디언트를 통신 지연 없이 동기화할 수 있게 됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 참고 사항:</strong> 대규모 연산이 활성화된 분산 AI 네트워크 환경(예: RoCEv2)에서는 스위치의 PFC 혼잡 스택 설정 누락 등으로 인한 TCP 폴백을 방지하는 것이 가장 핵심 모니터링 가치입니다.</li>
+        </ul>
+      `
+    }
+  };
+
   const OVERVIEW_DATA = {
     // --- Linux Troubleshooting Scenarios ---
     "linux-q01-server-slow": {
@@ -906,6 +964,22 @@ $ dmesg | tail -n 3
         "ip -s link 및 ethtool -S를 통한 NIC 물리 에러(rx_crc_errors) 탐지",
         "tcpdump 패킷 분석을 이용한 중복 ACK 및 TCP Retransmission(재전송) 이벤트 추적",
         "RoCE 우선순위 흐름 제어(PFC) 활성화 및 sysfs를 활용한 무손실 이더넷 망 검증"
+      ]
+    },
+    "gpu-q01-rdma-vs-tcp": {
+      title: "TCP vs RDMA 통신 메커니즘 및 GPU 클러스터 가속",
+      icon: "fa-solid fa-microchip",
+      summary: "표준 네트워킹 스택(TCP)과 원격 메모리 직접 접근(RDMA) 프로토콜의 아키텍처적 차이점을 메모리 복사 횟수, 커널 스택 개입 여부, 지연 시간 관점에서 파악하고 분산 GPU 연산에 필요한 하드웨어 가속 원리를 분석합니다.",
+      questions: [
+        "TCP 소켓 API를 이용할 때 발생하는 2회의 메모리 복사 작업과 컨텍스트 스위칭의 동작은?",
+        "RDMA의 Kernel Bypass 및 Zero-Copy가 지연 시간을 1마이크로초 미만으로 단축시킬 수 있는 기전은?",
+        "대규모 분산 학습망(NCCL)에서 RDMA가 차단되어 TCP로 Fallback될 때 성능 병목이 생기는 원인은?"
+      ],
+      skills: [
+        "ibverbs 라이브러리 API(ibv_reg_mr, ibv_post_send) 및 RDMA 큐 페어 전송 설계",
+        "PCIe DMA 메모리 맵핑 및 가상-물리 메모리 고정(Pinning) 기법 검증",
+        "NCCLCollective Communication 네트워크 인터페이스 바인딩 분석",
+        "mpstat 및 tcpdump를 활용한 소켓 네트워크 연산 시 CPU 스택 부하 측정"
       ]
     }
   };
@@ -1353,6 +1427,8 @@ $ dmesg | tail -n 3
       renderNetworkingLayout(doc);
     } else if (doc.category === "Coding" && doc.id !== 'coding_preparation_master_plan') {
       renderCodingLayout(doc);
+    } else if (doc.category === "GPU & AI Infrastructure" && doc.sections.length > 2) {
+      renderGpuLayout(doc);
     } else {
       renderGeneralLayout(doc);
     }
@@ -3383,6 +3459,390 @@ $ df -h /dev/sda1
 
       // Initialize simulator with first step
       updatePacketLossSimulator('congestion');
+    }
+
+    bindStatusSelector(doc.id);
+  }
+
+  // 3.6 GPU & AI INFRASTRUCTURE QUESTION RENDERER (TCP vs RDMA flow simulator)
+  function renderGpuLayout(doc) {
+    el.contentArea.classList.add('wide-layout');
+    const currentStatus = getStatus(doc.id);
+
+    // Extract key sections
+    const intent = doc.sections.find(s => s.title.includes("Intent"));
+    const english = doc.sections.find(s => s.title.includes("English") || s.title.includes("Answer"));
+    const korean = doc.sections.find(s => s.title.includes("Korean"));
+    const followups = doc.sections.find(s => s.title.includes("Follow-up"));
+    const notes = doc.sections.find(s => s.title.includes("Notes"));
+    const concepts = doc.sections.find(s => s.title.includes("Concepts"));
+    const troubleshooting = doc.sections.find(s => s.title.includes("Troubleshooting"));
+    const commands = doc.sections.find(s => s.title.includes("Commands"));
+
+    let html = buildHeaderHTML(doc, currentStatus);
+
+    // Render Interview Question if it exists
+    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase().includes("interview question"));
+    if (interviewQuestion) {
+      html += `
+        <div class="question-card" style="background: var(--card-bg); border-left: 4px solid hsl(var(--accent)); padding: 24px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); border: 1px solid var(--border-color); border-left-width: 4px;">
+          <div style="font-family: var(--font-heading); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: hsl(var(--accent)); margin-bottom: 12px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+            <i class="fa-solid fa-circle-question" style="font-size: 1rem;"></i> Interview Question (실제 질문)
+          </div>
+          <div class="question-text" style="font-size: 1.15rem; font-weight: 500; line-height: 1.6; color: var(--text-primary);">
+            ${interviewQuestion.content}
+          </div>
+        </div>
+      `;
+    }
+
+    if (OVERVIEW_DATA[doc.id]) {
+      html += buildOverviewCard(doc.id);
+    }
+
+    // Interactive Visualizer for gpu-q01-rdma-vs-tcp
+    if (doc.id === 'gpu-q01-rdma-vs-tcp') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-network-wired" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          TCP vs RDMA Memory Transfer Simulator (TCP vs RDMA 메모리 전송 시뮬레이터)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          <!-- Visual diagram row -->
+          <div class="dns-nodes-diagram" id="gpuNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 180px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; transition: all 0.3s ease;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="gpuStepGrid" style="grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="tcp" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: hsl(var(--accent)); text-transform: uppercase;">Traditional Stack</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-server" style="margin-right:4px;"></i>TCP 전송 (커널 개입)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">2 Copies, Context Switches, CPU load</div>
+            </div>
+            <div class="cpu-dial-card" data-step="rdma" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Kernel Bypass</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-bolt" style="margin-right:4px;"></i>RDMA 전송 (Zero-Copy)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Direct PCIe DMA, Kernel Bypass, sub-1us</div>
+            </div>
+          </div>
+          
+          <!-- Stats Panel (CPU & Latency Meters) -->
+          <div style="display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;">
+            <div style="flex: 1 1 200px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: hsl(var(--accent));"><i class="fa-solid fa-cpu"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">CPU System Usage (커널 부하)</div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                  <div style="flex-grow: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden;">
+                    <div id="gpuCpuBar" style="width: 25%; height: 100%; background: #0ea5e9; transition: all 0.5s ease;"></div>
+                  </div>
+                  <span id="gpuCpuVal" style="font-size: 0.85rem; font-family: var(--font-mono); font-weight: bold; width: 45px; text-align: right;">24.8%</span>
+                </div>
+              </div>
+            </div>
+            <div style="flex: 1 1 200px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #10b981;"><i class="fa-solid fa-stopwatch"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Network Latency (지연 시간)</div>
+                <div id="gpuLatencyVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #10b981; margin-top: 2px;">35.4 μs (microseconds)</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="gpuTerminalTitle"><i class="fa-solid fa-code" style="margin-right:6px;"></i>Code & Socket Interface Console</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 200px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="gpuConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">메모리 패스 및 데이터 이송 원리</span></div>
+                <div class="card-body" id="gpuAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Accordion: Interviewer's Intent
+    if (intent) {
+      html += buildAccordion("Interviewer's Intent (면접관의 질문 의도)", intent.content);
+    }
+
+    // Render Answer split tab card
+    if (english || korean) {
+      html += `
+        <div class="study-card">
+          <div class="card-tabs">
+            <button class="tab-btn active" id="gpuTabEng">Recommended English Answer</button>
+            <button class="tab-btn" id="gpuTabKor">Korean Summary</button>
+          </div>
+          <div class="card-body">
+            <div class="tab-content active" id="gpuContentEng">
+              ${wrapActiveRecall(english ? english.content : '')}
+            </div>
+            <div class="tab-content" id="gpuContentKor">
+              ${buildInterlinearHTML(english ? english.content : '', korean ? korean.content : '')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Accordion: Concepts / Troubleshooting / Production
+    let prepMaterials = '';
+    if (concepts) {
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 16px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${concepts.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(concepts.content)}</div>`;
+    }
+    if (doc.sections.find(s => s.title.includes("Why"))) {
+      const whySec = doc.sections.find(s => s.title.includes("Why"));
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${whySec.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(whySec.content)}</div>`;
+    }
+    if (doc.sections.find(s => s.title.includes("Comparison"))) {
+      const compSec = doc.sections.find(s => s.title.includes("Comparison"));
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${compSec.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(compSec.content)}</div>`;
+    }
+    if (doc.sections.find(s => s.title.includes("Production"))) {
+      const prodSec = doc.sections.find(s => s.title.includes("Production"));
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${prodSec.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(prodSec.content)}</div>`;
+    }
+
+    const renderedKeys = ['intent', 'english', 'answer', 'korean', 'why', 'concepts', 'comparison', 'production', 'follow-up', 'notes', 'commands', 'status', 'interview question'];
+    const unrendered = doc.sections.filter(s => {
+      const titleLower = s.title.toLowerCase();
+      if (renderedKeys.some(k => titleLower.includes(k))) return false;
+      if (doc.sections.length > 0 && s.title === doc.sections[0].title) return false;
+      return true;
+    });
+
+    unrendered.forEach(sec => {
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${sec.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(sec.content)}</div>`;
+    });
+
+    if (prepMaterials) {
+      html += buildAccordion("GPU Cluster Networking & RDMA Deep Dive (GPU 인프라 및 고속망 핵심 기술)", prepMaterials);
+    }
+
+    // Interactive Follow-up Question Flip Cards
+    if (followups) {
+      html += `<h2 style="font-family: var(--font-heading); margin-top:28px; font-size:1.40rem;"><i class="fa-solid fa-graduation-cap" style="color:hsl(var(--accent)); margin-right:8px;"></i> Interactive Follow-up Practice (꼬리 질문 연습)</h2>`;
+      html += parseFollowupCards(followups.content);
+    }
+
+    // Personal Notes
+    if (notes) {
+      html += buildAccordion("Personal Notes & Study Guide", notes.content);
+    }
+
+    el.contentArea.innerHTML = html;
+
+    // Tabs listener
+    const tEng = document.getElementById('gpuTabEng');
+    const tKor = document.getElementById('gpuTabKor');
+    const cEng = document.getElementById('gpuContentEng');
+    const cKor = document.getElementById('gpuContentKor');
+
+    if (tEng && tKor) {
+      tEng.addEventListener('click', () => {
+        tEng.classList.add('active');
+        tKor.classList.remove('active');
+        cEng.classList.add('active');
+        cKor.classList.remove('active');
+      });
+      tKor.addEventListener('click', () => {
+        tKor.classList.add('active');
+        tEng.classList.remove('active');
+        cKor.classList.add('active');
+        cEng.classList.remove('active');
+      });
+    }
+
+    // BIND SIMULATOR LOGIC FOR gpu-q01-rdma-vs-tcp
+    if (doc.id === 'gpu-q01-rdma-vs-tcp') {
+      const gpuStepCards = document.querySelectorAll('#gpuStepGrid .cpu-dial-card');
+      const gpuConsoleOutput = document.getElementById('gpuConsoleOutput');
+      const gpuAnalysisText = document.getElementById('gpuAnalysisText');
+      const gpuNodesDiagram = document.getElementById('gpuNodesDiagram');
+      const gpuTerminalTitle = document.getElementById('gpuTerminalTitle');
+      const gpuCpuBar = document.getElementById('gpuCpuBar');
+      const gpuCpuVal = document.getElementById('gpuCpuVal');
+      const gpuLatencyVal = document.getElementById('gpuLatencyVal');
+
+      function updateGpuDiagram(modeKey) {
+        let diagramHTML = '';
+        if (modeKey === 'tcp') {
+          diagramHTML = `
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; gap: 8px;">
+              <!-- Source Host -->
+              <div style="display:flex; flex-direction:column; gap:8px; align-items:center;">
+                <!-- Application User Space -->
+                <div style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 8px; padding: 6px 10px; width: 110px; text-align: center; font-size:0.75rem; font-weight:bold; color:var(--text-primary);">
+                  User Space
+                </div>
+                <div style="font-size:0.7rem; color:var(--text-secondary);"><i class="fa-solid fa-arrow-down-long"></i> Copy 1 (CPU)</div>
+                <!-- Kernel Space -->
+                <div style="background: rgba(245, 158, 11, 0.05); border: 2px solid #f59e0b; border-radius: 8px; padding: 6px 10px; width: 110px; text-align: center; font-size:0.75rem; font-weight:bold; color:#f59e0b;">
+                  Kernel (Socket)
+                </div>
+                <div style="font-size:0.7rem; color:var(--text-secondary);"><i class="fa-solid fa-arrow-down-long"></i> Copy 2 (DMA)</div>
+                <!-- NIC Space -->
+                <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 6px 10px; width: 110px; text-align: center; font-size:0.75rem; font-weight:bold; color:#10b981;">
+                  NIC Buffer
+                </div>
+              </div>
+              
+              <!-- Network Transit Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #cbd5e1; border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #f59e0b; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #f59e0b;"></div>
+                  <div style="position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: var(--text-secondary); background: #1e293b; padding: 1px 3px; border-radius: 2px; white-space: nowrap;">TCP/IP Stack (slow)</div>
+                </div>
+              </div>
+              
+              <!-- Destination Host -->
+              <div style="display:flex; flex-direction:column; gap:8px; align-items:center;">
+                <!-- NIC Space -->
+                <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 6px 10px; width: 110px; text-align: center; font-size:0.75rem; font-weight:bold; color:#10b981;">
+                  NIC Buffer
+                </div>
+                <div style="font-size:0.7rem; color:var(--text-secondary);"><i class="fa-solid fa-arrow-up-long"></i> Copy 3 (DMA)</div>
+                <!-- Kernel Space -->
+                <div style="background: rgba(245, 158, 11, 0.05); border: 2px solid #f59e0b; border-radius: 8px; padding: 6px 10px; width: 110px; text-align: center; font-size:0.75rem; font-weight:bold; color:#f59e0b;">
+                  Kernel (Socket)
+                </div>
+                <div style="font-size:0.7rem; color:var(--text-secondary);"><i class="fa-solid fa-arrow-up-long"></i> Copy 4 (CPU)</div>
+                <!-- Application User Space -->
+                <div style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 8px; padding: 6px 10px; width: 110px; text-align: center; font-size:0.75rem; font-weight:bold; color:var(--text-primary);">
+                  User Space
+                </div>
+              </div>
+            </div>
+            
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#f59e0b; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-circle-info"></i> TCP Socket Path: Requires context switches and 4 total memory copies across CPUs.
+            </div>
+          `;
+        } else if (modeKey === 'rdma') {
+          diagramHTML = `
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; gap: 8px;">
+              <!-- Source Host RDMA -->
+              <div style="display:flex; flex-direction:column; gap:20px; align-items:center;">
+                <!-- Application Registered Memory -->
+                <div style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 8px; padding: 8px 12px; width: 140px; text-align: center; font-size:0.75rem; font-weight:bold; color:#8b5cf6; position:relative;">
+                  <div style="position:absolute; top:-10px; left:50%; transform:translateX(-50%); background:#8b5cf6; color:white; font-size:0.5rem; padding:1px 4px; border-radius:3px; border:1px solid #1e293b; white-space:nowrap;">REGISTERED MEM (MR)</div>
+                  User Buffer A
+                </div>
+                <!-- HCA/RNIC -->
+                <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 6px 10px; width: 120px; text-align: center; font-size:0.75rem; font-weight:bold; color:#10b981;">
+                  RNIC (Host A)
+                </div>
+              </div>
+              
+              <!-- PCIe DMA link representation -->
+              <div style="position:relative; width:0; height:0;">
+                 <div style="position:absolute; top:-60px; left:-80px; width:4px; height:50px; border-left:2px dashed #8b5cf6;"></div>
+              </div>
+              
+              <!-- Direct Memory Transit Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #8b5cf6; border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 10px; height: 10px; background-color: #8b5cf6; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 10px #8b5cf6;"></div>
+                  <div style="position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #ffffff; background: #8b5cf6; padding: 1px 4px; border-radius: 2px; white-space: nowrap;">Kernel Bypass (Zero Copy)</div>
+                </div>
+              </div>
+              
+              <!-- PCIe DMA link representation -->
+              <div style="position:relative; width:0; height:0;">
+                 <div style="position:absolute; top:-60px; left:80px; width:4px; height:50px; border-left:2px dashed #8b5cf6;"></div>
+              </div>
+              
+              <!-- Destination Host RDMA -->
+              <div style="display:flex; flex-direction:column; gap:20px; align-items:center;">
+                <!-- Application Registered Memory -->
+                <div style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 8px; padding: 8px 12px; width: 140px; text-align: center; font-size:0.75rem; font-weight:bold; color:#8b5cf6; position:relative;">
+                  <div style="position:absolute; top:-10px; left:50%; transform:translateX(-50%); background:#8b5cf6; color:white; font-size:0.5rem; padding:1px 4px; border-radius:3px; border:1px solid #1e293b; white-space:nowrap;">REGISTERED MEM (MR)</div>
+                  User Buffer B
+                </div>
+                <!-- HCA/RNIC -->
+                <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 6px 10px; width: 120px; text-align: center; font-size:0.75rem; font-weight:bold; color:#10b981;">
+                  RNIC (Host B)
+                </div>
+              </div>
+            </div>
+            
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#8b5cf6; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-circle-nodes"></i> RDMA Path: RNIC reads/writes directly to user-space memory via PCIe DMA, bypassing kernel and CPU entirely.
+            </div>
+          `;
+        }
+        return diagramHTML;
+      }
+
+      function updateGpuSimulator(modeKey) {
+        const modeData = gpuSimData[modeKey];
+        if (!modeData) return;
+
+        // Update indicators
+        if (modeKey === 'tcp') {
+          if (gpuTerminalTitle) gpuTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>Standard BSD Socket API & CPU System Overhead';
+          gpuCpuBar.style.width = '24.8%';
+          gpuCpuBar.style.background = '#f59e0b';
+          gpuCpuVal.textContent = '24.8%';
+          gpuCpuVal.style.color = '#f59e0b';
+          gpuLatencyVal.textContent = '35.4 μs (microseconds)';
+          gpuLatencyVal.style.color = '#f59e0b';
+        } else if (modeKey === 'rdma') {
+          if (gpuTerminalTitle) gpuTerminalTitle.innerHTML = '<i class="fa-solid fa-code" style="margin-right:6px;"></i>libibverbs RDMA Native Memory Registration & Post API';
+          gpuCpuBar.style.width = '0.15%';
+          gpuCpuBar.style.background = '#10b981';
+          gpuCpuVal.textContent = '0.15%';
+          gpuCpuVal.style.color = '#10b981';
+          gpuLatencyVal.textContent = '0.78 μs (sub-microsecond)';
+          gpuLatencyVal.style.color = '#10b981';
+        }
+
+        // 1. Update diagram
+        gpuNodesDiagram.innerHTML = updateGpuDiagram(modeKey);
+
+        // 2. Update logs and descriptions
+        gpuConsoleOutput.innerHTML = modeData.console;
+        gpuAnalysisText.innerHTML = modeData.analysis;
+      }
+
+      gpuStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          gpuStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+          
+          const modeKey = card.dataset.step;
+          updateGpuSimulator(modeKey);
+        });
+      });
+
+      // Initialize simulator with first step
+      updateGpuSimulator('tcp');
     }
 
     bindStatusSelector(doc.id);
