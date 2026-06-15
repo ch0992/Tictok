@@ -1556,7 +1556,7 @@ all    1.10   <span class="console-highlight">0.15</span>     0.10   98.65`,
     let html = buildHeaderHTML(doc, currentStatus);
 
     // 0. Sleek Interview Question Card
-    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase().includes("interview question"));
+    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase() === "interview question");
     if (interviewQuestion) {
       html += `
         <div class="question-card" style="background: var(--card-bg); border-left: 4px solid hsl(var(--accent)); padding: 24px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); border: 1px solid var(--border-color); border-left-width: 4px;">
@@ -2190,7 +2190,7 @@ $ df -h /dev/sda1
     let html = buildHeaderHTML(doc, currentStatus);
 
     // Render Interview Question if it exists
-    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase().includes("interview question"));
+    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase() === "interview question");
     if (interviewQuestion) {
       html += `
         <div class="question-card" style="background: var(--card-bg); border-left: 4px solid hsl(var(--accent)); padding: 24px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); border: 1px solid var(--border-color); border-left-width: 4px;">
@@ -3482,7 +3482,7 @@ $ df -h /dev/sda1
     let html = buildHeaderHTML(doc, currentStatus);
 
     // Render Interview Question if it exists
-    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase().includes("interview question"));
+    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase() === "interview question");
     if (interviewQuestion) {
       html += `
         <div class="question-card" style="background: var(--card-bg); border-left: 4px solid hsl(var(--accent)); padding: 24px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); border: 1px solid var(--border-color); border-left-width: 4px;">
@@ -4149,17 +4149,131 @@ $ df -h /dev/sda1
   // --- Sub-parsers & Annotators ---
 
   function parseFollowupCards(htmlContent) {
-    // Splits expected follow-up questions from a list into a interactive 3D flip card grid
+    // Splits expected follow-up questions from a list into an interactive 3D flip card grid
     const div = document.createElement('div');
     div.innerHTML = htmlContent;
-    const questions = Array.from(div.querySelectorAll('li, p')).map(el => el.textContent).filter(Boolean);
     
-    // Fallback if formatting is non-standard
-    if (questions.length === 0) return htmlContent;
+    const hasExpectedAnswers = htmlContent.includes("Expected Answer");
+    let cards = [];
+    
+    const getCleanHTML = (el) => {
+      if (el.tagName.toUpperCase() === 'P' || el.tagName.toUpperCase() === 'LI') {
+        return el.innerHTML;
+      }
+      return el.outerHTML;
+    };
+    
+    if (hasExpectedAnswers) {
+      // Group elements by Q&A blocks
+      let groups = [];
+      let currentGroup = [];
+      
+      Array.from(div.children).forEach(el => {
+        const text = el.textContent.trim();
+        const tagName = el.tagName.toUpperCase();
+        
+        if (tagName === 'HR') {
+          if (currentGroup.length > 0) {
+            groups.push(currentGroup);
+            currentGroup = [];
+          }
+        } else if (tagName.match(/^H[1-6]$/)) {
+          if (currentGroup.length > 0) {
+            groups.push(currentGroup);
+            currentGroup = [];
+          }
+          if (!text.match(/^Q\d+$/i)) {
+            currentGroup.push(el);
+          }
+        } else {
+          currentGroup.push(el);
+        }
+      });
+      if (currentGroup.length > 0) {
+        groups.push(currentGroup);
+      }
+      
+      groups.forEach(group => {
+        let expectedAnswerIdx = -1;
+        for (let i = 0; i < group.length; i++) {
+          if (group[i].textContent.includes("Expected Answer")) {
+            expectedAnswerIdx = i;
+            break;
+          }
+        }
+        
+        let qHTMLs = [];
+        let aHTMLs = [];
+        
+        if (expectedAnswerIdx !== -1) {
+          // Everything before expectedAnswerIdx is Question
+          for (let i = 0; i < expectedAnswerIdx; i++) {
+            qHTMLs.push(getCleanHTML(group[i]));
+          }
+          
+          // The expectedAnswer element itself: strip "Expected Answer" prefix
+          const el = group[expectedAnswerIdx];
+          let html = el.innerHTML;
+          html = html.replace(/^Expected Answer\s*(?:<br\s*\/?>)?/i, "").trim();
+          html = html.replace(/^모범 답변\s*(?:<br\s*\/?>)?/i, "").trim();
+          html = html.replace(/^예상 답변\s*(?:<br\s*\/?>)?/i, "").trim();
+          html = html.replace(/^\s*<strong>\s*Expected Answer\s*<\/strong>\s*(?:<br\s*\/?>)?/i, "").trim();
+          html = html.replace(/^\s*<strong>\s*모범 답변\s*<\/strong>\s*(?:<br\s*\/?>)?/i, "").trim();
+          html = html.replace(/^\s*<strong>\s*예상 답변\s*<\/strong>\s*(?:<br\s*\/?>)?/i, "").trim();
+          html = html.replace(/^(?:<br\s*\/?>|\s)+/i, "").trim();
+          
+          if (html) {
+            aHTMLs.push(html);
+          }
+          
+          // Everything after expectedAnswerIdx is Answer
+          for (let i = expectedAnswerIdx + 1; i < group.length; i++) {
+            aHTMLs.push(getCleanHTML(group[i]));
+          }
+        } else {
+          // No expected answer found in this group, treat all as Question
+          group.forEach(el => {
+            qHTMLs.push(getCleanHTML(el));
+          });
+        }
+        
+        const qContent = qHTMLs.filter(Boolean).join("<br>").trim();
+        const aContent = aHTMLs.filter(Boolean).join("<br>").trim();
+        
+        if (qContent) {
+          cards.push({
+            question: qContent,
+            answer: aContent || null
+          });
+        }
+      });
+    } else {
+      // Legacy fallback
+      const lis = div.querySelectorAll('li');
+      if (lis.length > 0) {
+        lis.forEach(li => {
+          cards.push({
+            question: li.innerHTML.trim(),
+            answer: null
+          });
+        });
+      } else {
+        const ps = div.querySelectorAll('p');
+        if (ps.length > 0) {
+          ps.forEach(p => {
+            cards.push({
+              question: p.innerHTML.trim(),
+              answer: null
+            });
+          });
+        }
+      }
+    }
+    
+    if (cards.length === 0) return htmlContent;
     
     let gridHTML = '<div class="flip-card-grid">';
     
-    // Match question index to simulated answers
     const mockFollowupAnswers = {
       0: "프로젝트 진행 방식과 플랫폼 사용 기술, 아키텍처 설계 과정을 언급합니다.",
       1: "GPU 인프라와 VAST Storage 구성, VM과 Bare Metal의 가상화 성능 차이 분석을 기술적으로 답합니다.",
@@ -4167,9 +4281,11 @@ $ df -h /dev/sda1
       3: "대규모 트래픽 분산을 위해 클러스터 크기를 확장하고 컨테이너를 수천 개 단위로 수용했던 스케일을 예시로 듭니다.",
       4: "글로벌 딜리버리(TikTok)의 복잡성과 거대 클라우드 환경에서 Reliability를 수립하기 위한 목적을 정렬합니다."
     };
-
-    questions.forEach((q, idx) => {
-      const ans = mockFollowupAnswers[idx] || "데이터 기반 문제 분석 절차와 다부서 협업, 재발 방지를 위한 모니터링 수립으로 조치했음을 설명합니다.";
+    
+    cards.forEach((card, idx) => {
+      const q = card.question;
+      const ans = card.answer || mockFollowupAnswers[idx] || "데이터 기반 문제 분석 절차와 다부서 협업, 재발 방지를 위한 모니터링 수립으로 조치했음을 설명합니다.";
+      
       gridHTML += `
         <div class="flip-card">
           <div class="flip-card-inner">
