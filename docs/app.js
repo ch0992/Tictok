@@ -1013,6 +1013,22 @@ all    1.10   <span class="console-highlight">0.15</span>     0.10   98.65`,
         "VAST 드라이버 측 NFS 클라이언트 모듈 수정 및 병합(Reassembly) 기능 보완 검증",
         "RCA 보고서 작성 및 소프트웨어 호환성 병목 제거 체크리스트 구축"
       ]
+    },
+    "gpu-q04-gpu-cluster-architecture": {
+      title: "현대적 분산 GPU 학습 클러스터 아키텍처 및 병목 설계",
+      icon: "fa-solid fa-server",
+      summary: "GPU 연산 노드, 고속 RDMA 네트워크, 병렬 공유 올플래시 스토리지, 자원 스케줄러(Slurm/Kubernetes) 및 통합 하드웨어 관제(DCGM)로 구성되는 현대적 AI 인프라 디자인과 주요 병목 요소를 진단합니다.",
+      questions: [
+        "분산 학습 시 가중치/그래디언트 동기화(AllReduce) 지연을 예방하는 RDMA의 핵심 기전은?",
+        "공유 스토리지 대역폭 포화로 인한 GPU Starvation 병목 현상의 징후와 방지 대책은?",
+        "학습 클러스터 자원 스케줄러로 Slurm과 Kubernetes를 채택하는 각각의 핵심 설계적 차이는?"
+      ],
+      skills: [
+        "DCGM(Data Center GPU Manager)을 활용한 코어별 온도, 전력, SM 가동률 추적",
+        "Slurm 잡 관리자 및 Kubernetes GPU 토폴로지 자원 분배 실무 설정 진단",
+        "분산 연산구간 네트워크 RTT 지연 스파이크 분석 및 RDMA 패브릭 최적화",
+        "End-to-End 데이터 파이프라인의 에포크(Epoch) 데이터 로딩 지연 원인 프로파일링"
+      ]
     }
   };
 
