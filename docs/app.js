@@ -997,6 +997,22 @@ all    1.10   <span class="console-highlight">0.15</span>     0.10   98.65`,
         "libibverbs 도구(ibv_devinfo, rping)를 사용한 L3 라우팅 구간 RoCEv2 정상성 점검",
         "NCCL 및 MPI 환경에서의 GPUDirect RDMA(GDR) 활성화 여부 프로파일링"
       ]
+    },
+    "gpu-q03-vast-storage": {
+      title: "VAST Storage 및 분산 학습 스토리지 성능 트러블슈팅",
+      icon: "fa-solid fa-database",
+      summary: "GPU 클러스터 환경에서 대용량 가중치 및 체크포인트 쓰기 성능이 급격히 저하된 장애 사례를 기반으로, 스토리지-네트워크-드라이버 계층을 체계적으로 검사하여 원인을 규명(RCA)하는 과정을 분석합니다.",
+      questions: [
+        "체크포인트 쓰기 성능이 기대 성능(40 GB/s) 대비 TCP 대역폭(9.7 GB/s) 수준으로 저하된 원인은?",
+        "스토리지 병목, 네트워크 스위치 유실, RDMA 폴백 현상을 계층별로 검증하는 순서는?",
+        "드라이버와 커널 소프트웨어 호환성 장애로 발생하는 저수준 입출력 병목 디버깅 방안은?"
+      ],
+      skills: [
+        "FIO 및 스토리지 벤치마크 도구를 활용한 IOPS 및 Throughput 성능 지표 측정",
+        "ethtool 및 rdma-tool을 사용한 커널 드라이버 연결 및 가속 활성화 진단",
+        "분산 연산(NCCL) 환경과 VAST 스토리지 성능 통계 대조 분석",
+        "RCA 보고서 작성 및 재발 방지를 위한 계층별 시스템 성능 체크리스트 구축"
+      ]
     }
   };
 

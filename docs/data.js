@@ -625,6 +625,110 @@ const STUDY_DATA = [
     ]
   },
   {
+    "id": "gpu-q03-vast-storage",
+    "title": "Metadata",
+    "category": "GPU & AI Infrastructure",
+    "importance": "★★★★★",
+    "frequency": "★★★★☆",
+    "probability": null,
+    "status": "Needs",
+    "path": "gpu/gpu-q03-vast-storage.md",
+    "sections": [
+      {
+        "title": "gpu-q03-vast-storage.md",
+        "content": ""
+      },
+      {
+        "title": "GPU & AI Infrastructure Interview Question 03",
+        "content": ""
+      },
+      {
+        "title": "Tell Me About a Challenging Storage Performance Incident",
+        "content": "<h3>Difficulty</h3>\n\n<p>Hard</p>\n\n<h3>Importance</h3>\n\n<p>★★★★★</p>\n\n<h3>Frequency</h3>\n\n<p>★★★★☆</p>\n\n<hr>"
+      },
+      {
+        "title": "Quick Recall",
+        "content": "<p>Expected</p>\n\n<p>RDMA Throughput</p>\n\n<p>↓</p>\n\n<p>Observed</p>\n\n<p>TCP-Level Performance</p>\n\n<p>↓</p>\n\n<p>Investigated</p>\n\n<p>Storage</p>\n\n<p>Network</p>\n\n<p>RDMA</p>\n\n<p>Kernel</p>\n\n<p>↓</p>\n\n<p>Root Cause</p>\n\n<p>RDMA Path Not Functioning Correctly</p>\n\n<p>↓</p>\n\n<p>Resolution</p>\n\n<p>Kernel / Driver Update</p>\n\n<p>↓</p>\n\n<p>Performance Restored</p>\n\n<hr>"
+      },
+      {
+        "title": "Interview Question",
+        "content": "<p>Tell me about a challenging infrastructure incident that you investigated and resolved.</p>\n\n<hr>"
+      },
+      {
+        "title": "Interviewer's Intent",
+        "content": "<p>The interviewer wants to evaluate:</p>\n\n<ul>\n<li>Troubleshooting methodology</li>\n<li>Technical depth</li>\n<li>RCA ability</li>\n<li>Communication skills</li>\n<li>Ownership</li>\n</ul>\n\n<p>This question is commonly asked in both behavioral and technical interviews.</p>\n\n<hr>"
+      },
+      {
+        "title": "Situation",
+        "content": "<p>I was supporting a GPU infrastructure environment used for AI workloads.</p>\n\n<p>The environment relied on VAST Storage and RDMA networking to deliver high throughput to GPU training clusters.</p>\n\n<p>Users reported that storage performance was significantly lower than expected.</p>\n\n<p>Because storage throughput directly affected training performance, the issue became a high-priority investigation.</p>\n\n<hr>"
+      },
+      {
+        "title": "Task",
+        "content": "<p>My responsibility was to identify the source of the performance degradation and determine whether the issue originated from:</p>\n\n<ul>\n<li>Storage</li>\n<li>Network</li>\n<li>RDMA Configuration</li>\n<li>Host Configuration</li>\n</ul>\n\n<p>The challenge was that all components appeared healthy at first glance.</p>\n\n<hr>"
+      },
+      {
+        "title": "Actions",
+        "content": ""
+      },
+      {
+        "title": "Step 1",
+        "content": "<p>Establish Baseline</p>\n\n<p>We compared performance across:</p>\n\n<ul>\n<li>Development VM</li>\n<li>Production VM</li>\n<li>Bare Metal Servers</li>\n</ul>\n\n<p>Observed Results</p>\n\n<p>Development VM</p>\n\n<p>TCP</p>\n\n<p>~9.7 GB/s</p>\n\n<p>Expected</p>\n\n<p>RDMA</p>\n\n<p>~40+ GB/s</p>\n\n<hr>"
+      },
+      {
+        "title": "Step 2",
+        "content": "<p>Validate Storage</p>\n\n<p>We reviewed:</p>\n\n<ul>\n<li>VAST Storage Health</li>\n<li>Storage Configuration</li>\n<li>Throughput Metrics</li>\n</ul>\n\n<p>Storage appeared healthy.</p>\n\n<hr>"
+      },
+      {
+        "title": "Step 3",
+        "content": "<p>Validate Network</p>\n\n<p>We verified:</p>\n\n<ul>\n<li>Physical Connectivity</li>\n<li>Switch Configuration</li>\n<li>Network Performance</li>\n</ul>\n\n<p>Network infrastructure appeared healthy.</p>\n\n<hr>"
+      },
+      {
+        "title": "Step 4",
+        "content": "<p>Investigate RDMA Path</p>\n\n<p>We suspected that traffic was not using the expected RDMA communication path.</p>\n\n<p>We reviewed:</p>\n\n<ul>\n<li>RDMA Configuration</li>\n<li>RoCE Configuration</li>\n<li>Driver Status</li>\n<li>Interface Settings</li>\n</ul>\n\n<p>At this stage we identified evidence suggesting that communication was falling back to traditional TCP networking.</p>\n\n<hr>"
+      },
+      {
+        "title": "Step 5",
+        "content": "<p>Deep Investigation</p>\n\n<p>The issue continued even after RDMA-related validation.</p>\n\n<p>The infrastructure team continued troubleshooting and eventually identified a lower-level software compatibility issue.</p>\n\n<p>A kernel and driver update was performed.</p>\n\n<p>Following the update, performance returned to expected levels.</p>\n\n<hr>"
+      },
+      {
+        "title": "Result",
+        "content": "<p>Observed Throughput</p>\n\n<p>Before</p>\n\n<p>~9.7 GB/s</p>\n\n<p>After</p>\n\n<p>~40+ GB/s</p>\n\n<p>Performance aligned with expected RDMA behavior.</p>\n\n<p>The issue was resolved without hardware replacement.</p>\n\n<p>The investigation also improved our validation procedures for future deployments.</p>\n\n<hr>"
+      },
+      {
+        "title": "Technical Lessons Learned",
+        "content": ""
+      },
+      {
+        "title": "Lesson 1",
+        "content": "<p>Never assume RDMA is working simply because it is configured.</p>\n\n<p>Always validate actual traffic behavior.</p>\n\n<hr>"
+      },
+      {
+        "title": "Lesson 2",
+        "content": "<p>Performance issues often span multiple layers.</p>\n\n<p>Storage symptoms can originate from:</p>\n\n<ul>\n<li>Network</li>\n<li>Drivers</li>\n<li>Kernel</li>\n<li>Configuration</li>\n</ul>\n\n<hr>"
+      },
+      {
+        "title": "Lesson 3",
+        "content": "<p>A structured elimination process is critical.</p>\n\n<p>We systematically ruled out:</p>\n\n<ul>\n<li>Storage</li>\n<li>Network</li>\n<li>Hardware</li>\n</ul>\n\n<p>before identifying the lower-level software issue.</p>\n\n<hr>"
+      },
+      {
+        "title": "Korean Summary",
+        "content": "<p>GPU 학습 환경에서 VAST Storage 성능이 기대보다 크게 낮게 나타났다.</p>\n\n<p>예상</p>\n\n<p>RDMA</p>\n\n<p>40GB/s 이상</p>\n\n<p>실제</p>\n\n<p>약 9.7GB/s</p>\n\n<hr>\n\n<p>조사 순서</p>\n\n<p>Storage 확인</p>\n\n<p>↓</p>\n\n<p>Network 확인</p>\n\n<p>↓</p>\n\n<p>RDMA 검증</p>\n\n<p>↓</p>\n\n<p>RoCE 검증</p>\n\n<p>↓</p>\n\n<p>Driver 검증</p>\n\n<p>↓</p>\n\n<p>Kernel 검증</p>\n\n<hr>\n\n<p>최종적으로 Kernel / Driver 관련 이슈가 확인되었고 업데이트 이후 성능이 정상 수준으로 회복되었다.</p>\n\n<hr>"
+      },
+      {
+        "title": "Common Interview Follow-up",
+        "content": "<h3>Q1</h3>\n\n<p>Why did you initially suspect RDMA?</p>\n\n<p>Expected Answer</p>\n\n<p>Observed throughput was much closer to TCP performance than expected RDMA performance.</p>\n\n<hr>\n\n<h3>Q2</h3>\n\n<p>How did you isolate the problem?</p>\n\n<p>Expected Answer</p>\n\n<p>By systematically validating storage, networking, RDMA configuration, and host software layers.</p>\n\n<hr>\n\n<h3>Q3</h3>\n\n<p>Why is this a good example of troubleshooting?</p>\n\n<p>Expected Answer</p>\n\n<p>The investigation followed evidence rather than assumptions and eliminated potential causes one layer at a time.</p>\n\n<hr>\n\n<h3>Q4</h3>\n\n<p>What was the biggest lesson?</p>\n\n<p>Expected Answer</p>\n\n<p>Never assume that a configured feature is functioning correctly.</p>\n\n<p>Always verify actual behavior.</p>\n\n<hr>"
+      },
+      {
+        "title": "ByteDance Relevance",
+        "content": "<p>This example demonstrates:</p>\n\n<ul>\n<li>Large-scale infrastructure troubleshooting</li>\n<li>GPU environment experience</li>\n<li>Storage performance analysis</li>\n<li>RDMA knowledge</li>\n<li>Cross-functional collaboration</li>\n<li>RCA methodology</li>\n</ul>\n\n<p>All of these are highly relevant to DCS Cloud.</p>\n\n<hr>"
+      },
+      {
+        "title": "Personal Notes",
+        "content": "<p>Strong Interview Message</p>\n\n<p>I focus on proving or disproving hypotheses using measurements rather than assumptions.</p>\n\n<hr>\n\n<p>Strong Interview Quote</p>\n\n<p>\"We did not start by searching for the root cause. We started by identifying which layer was not behaving as expected.\"</p>\n\n<p>This sounds very senior and aligns well with SRE-style incident investigation.</p>\n\n<hr>"
+      }
+    ]
+  },
+  {
     "id": "network-q02-dns-resolution",
     "title": "Metadata",
     "category": "Networking",
