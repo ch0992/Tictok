@@ -978,8 +978,24 @@ all    1.10   <span class="console-highlight">0.15</span>     0.10   98.65`,
       skills: [
         "ibverbs 라이브러리 API(ibv_reg_mr, ibv_post_send) 및 RDMA 큐 페어 전송 설계",
         "PCIe DMA 메모리 맵핑 및 가상-물리 메모리 고정(Pinning) 기법 검증",
-        "NCCLCollective Communication 네트워크 인터페이스 바인딩 분석",
+        "NCCL Collective Communication 네트워크 인터페이스 바인딩 분석",
         "mpstat 및 tcpdump를 활용한 소켓 네트워크 연산 시 CPU 스택 부하 측정"
+      ]
+    },
+    "gpu-q02-roce": {
+      title: "RoCE(RDMA over Converged Ethernet) 설계 및 무손실 제어",
+      icon: "fa-solid fa-bolt",
+      summary: "인피니밴드 전용 하드웨어 대신 범용 이더넷 장비를 활용해 고성능 RDMA 통신을 구축하는 RoCE 기술의 특성과, 무손실 이더넷(PFC, ECN) 환경을 구축하기 위해 요구되는 최적화 기법을 다룹니다.",
+      questions: [
+        "RoCEv1 (L2 기반)과 RoCEv2 (L3 UDP/IP 캡슐화 기반)의 네트워킹 차이점은 무엇인가?",
+        "패킷 유실 방지를 위한 PFC(Priority Flow Control) 흐름 제어의 동작 및 스위치 데드락 해소법은?",
+        "ECN(Explicit Congestion Notification)이 활성화되어 혼잡 패킷을 감속 제어(DCQCN)하는 기전은?"
+      ],
+      skills: [
+        "ethtool 및 sysfs를 사용한 포트별 PFC(PAUSE 프레임) 및 ECN 카운터 모니터링",
+        "스위치 PFC 우선순위 큐 맵핑 및 대역폭 파티셔닝 정책 상태 진단",
+        "libibverbs 도구(ibv_devinfo, rping)를 사용한 L3 라우팅 구간 RoCEv2 정상성 점검",
+        "NCCL 및 MPI 환경에서의 GPUDirect RDMA(GDR) 활성화 여부 프로파일링"
       ]
     }
   };
