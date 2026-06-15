@@ -574,6 +574,108 @@ http {
     }
   };
 
+  const packetLossSimData = {
+    congestion: {
+      activeStep: 1,
+      console: `# Check link utilization and switch queue drops
+$ tc -s qdisc show dev eth0
+qdisc fq_codel 0: root refcnt 2 limit 10240 flows 1024 quantum 1514 
+ <span class="console-highlight">sent 14.8G bytes 9812401 pkt (dropped 124801, overlimits 459102)</span><span class="console-tooltip">dropped: 큐 버퍼가 포화되어 커널 또는 스위치가 드롭한 패킷 개수입니다.<br>overlimits: 인터페이스 속도 한계를 초과하여 스케줄러가 전송을 보류하거나 버린 횟수입니다.</span>
+ 
+# ethtool statistics check showing switch-level buffer drops
+$ ethtool -S eth0 | grep -E "drop|overflow"
+     rx_queue_drop: 0
+     tx_queue_drop: 124801
+     <span class="console-highlight">rx_buf_overflow: 8901<span class="console-tooltip">rx_buf_overflow: 랜카드 링 버퍼나 스위치 버퍼 오버플로우로 인해 유실된 RX 패킷 수로, 입력 패킷 속도가 처리 속도보다 빨라 발생합니다.</span></span>
+     rx_fw_discards: 0`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #0ea5e9; margin-right: 6px;"></i><strong>네트워크 혼잡 (Link Saturation & Buffer Overflow)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>발생 기전:</strong> 송신 속도가 수신 노드 혹은 중간 스위치 포트의 대역폭 한계(egress queue)를 초과하여 스위치 큐 버퍼가 포화되면, 신규 패킷을 그냥 폐기하는 <strong>꼬리 드롭(Tail Drop)</strong>이 발생합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>TCP 영향:</strong> 패킷이 누락되면서 수신 측은 중복 ACK를 보내고 송신 측은 Fast Retransmit 또는 RTO 시간 초과로 재전송을 가동하며, 혼잡 윈도우(CWND) 크기를 낮추어 전송 속도가 급감합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>진단 기법:</strong> <code>tc -s qdisc</code>에서 <code>dropped</code> 수치 증가세, 혹은 <code>ethtool -S</code>를 활용해 링 버퍼 오버플로우 카운터를 실시간 감시합니다.</li>
+          <li style="margin-bottom: 0;"><strong>장애 대책:</strong> 큐 버퍼 크기 확장(txqueuelen 조정), BBR과 같은 고효율 혼잡 제어 알고리즘 도입, 또는 포트 본딩(LACP)으로 대역폭 자체를 증설합니다.</li>
+        </ul>
+      `
+    },
+    mtu: {
+      activeStep: 2,
+      console: `# Test with Jumbo Frames (9000 bytes) with Don't Fragment (DF) flag set
+$ ping -M do -s 8972 10.0.0.21
+PING 10.0.0.21 (10.0.0.21) 8972(9000) bytes of data.
+<span class="console-highlight">ping: local error: Message too long, mtu=1500<span class="console-tooltip">Message too long (mtu=1500): 로컬 NIC의 MTU가 1500으로 설정되어 있어, DF(Don't Fragment) 플래그가 걸린 9000바이트 패킷을 전송할 수 없음을 나타냅니다.</span></span>
+
+# Test from a source that allows sending, but drops silently in the middle (MTU Black Hole)
+$ ping -M do -s 8972 10.0.0.22
+PING 10.0.0.22 (10.0.0.22) 8972(9000) bytes of data.
+From 10.0.0.1 icmp_seq=1 <span class="console-highlight">Packet needs fragmentation but DF set<span class="console-tooltip">Packet needs fragmentation: 경로상에 MTU 1500인 스위치가 DF가 켜진 9000바이트 패킷을 수신하여 드롭했음을 알리는 ICMP Type 3 Code 4 메시지입니다.</span></span>
+--- 10.0.0.22 ping statistics ---
+5 packets transmitted, 0 received, <span class="console-highlight correct-flag">100% packet loss</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #f59e0b; margin-right: 6px;"></i><strong>MTU 크기 불일치 (Jumbo Frame & MTU Black Hole)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>발생 기전:</strong> 서버는 점보 프레임(MTU 9000)으로 대용량 패킷을 송출했으나, 중간 스위치나 VPN 터널 장비가 표준 1500 바이트 크기 제한을 가졌을 때, <strong>단편화 금지(DF=1)</strong> 플래그가 선언되어 있다면 패킷을 전송하지 못하고 드롭합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>블랙홀 현상:</strong> 중간 라우터가 "Fragmentation Needed" ICMP 응답을 돌려줘야 하나, 중간 방화벽이 ICMP 메시지를 차단(Block)하면 송신 측은 유실 여부를 인지하지 못하고 연결이 끊기는 블랙홀 현상이 일어납니다.</li>
+          <li style="margin-bottom: 6px;"><strong>진단 기법:</strong> <code>ping -M do -s &lt;size&gt;</code> 커맨드를 활용해 패킷 크기를 조절해가며 어느 경계 크기부터 무응답 유실이 발생하는지 파악합니다.</li>
+          <li style="margin-bottom: 0;"><strong>장애 대책:</strong> 전송 경로 상의 모든 스위치 및 포트의 MTU 설정을 9000으로 균일화하거나, 서버 커널에서 MSS 조작(TCPMSS 클램핑)을 적용합니다.</li>
+        </ul>
+      `
+    },
+    crc: {
+      activeStep: 3,
+      console: `# Read network interface hardware error counters
+$ ip -s link show dev eth0
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000
+    link/ether 52:54:00:fa:19:bc brd ff:ff:ff:ff:ff:ff
+    RX: bytes  packets  errors  dropped overrun mcast   
+    1840192801 12049102 <span class="console-highlight">8491</span>    0       <span class="console-highlight">182</span>     0       <span class="console-highlight">RX errors detected<span class="console-tooltip">RX errors & overrun: 물리 케이블 불량이나 NIC 수신 링 버퍼 가득 참(Overrun) 현상으로 커널이 정상적으로 읽어들이지 못한 에러 패킷 수입니다.</span></span>
+    TX: bytes  packets  errors  dropped carrier collsns 
+    9481029401 89102409 0       0       0       0       
+
+# Check detail Ethernet stats via ethtool
+$ ethtool -S eth0 | grep -E "crc|align|frame"
+     <span class="console-highlight">rx_crc_errors: 8309<span class="console-tooltip">rx_crc_errors: 물리적인 패킷 손상이나 케이블 노이즈 등으로 인해 프레임의 체크섬(CRC) 검증이 실패하여 폐기된 에러 카운터입니다.</span></span>
+     rx_align_errors: 182
+     rx_frame_errors: 8491`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #ef4444; margin-right: 6px;"></i><strong>물리 에러 (CRC Checksum Failure & Faulty Cable)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>발생 기전:</strong> 동축 또는 광케이블의 손상, SFP+ 트랜시버의 노화, 또는 커넥터 불량으로 인해 전송 도중 패킷 데이터 비트가 물리적으로 깨지면, 수신 측 NIC 하드웨어가 <strong>CRC 검증 실패</strong> 판정 후 패킷을 파기합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>특징적 징후:</strong> 네트워크 혼잡이 심하지 않음에도 특정 포트에서 무작위적인 패킷 손실이 지속되며, 핑 응답 시간이 불안정하고 연결이 간헐적으로 끊깁니다.</li>
+          <li style="margin-bottom: 6px;"><strong>진단 기법:</strong> <code>ip -s link</code> 상의 RX errors 누적치 및 <code>ethtool -S</code> 명령어 출력 중 <code>rx_crc_errors</code> 카운터의 지속적인 실시간 증가세를 검사합니다.</li>
+          <li style="margin-bottom: 0;"><strong>장애 대책:</strong> 에러가 발생한 물리 케이블을 교체하거나 광 모듈(SFP+) 청소 및 교체, 포트 스위치 모듈의 상태를 점검합니다.</li>
+        </ul>
+      `
+    },
+    rdma_fallback: {
+      activeStep: 4,
+      console: `# Check RoCE / IB link status and error counters
+$ rdma link show
+link mlx5_0/1 state ACTIVE physical_state LINK_UP netdev eth0
+
+# Verify PFC (Priority Flow Control) switch drop logs
+$ ethtool -S eth0 | grep -i "prio"
+     tx_prio0_packets: 984019280
+     rx_prio0_packets: 849102910
+     <span class="console-highlight">rx_prio0_dropped: 410292<span class="console-tooltip">rx_prio0_dropped: RoCE 환경에서 PFC 우선순위 큐 포화나 무손실 전송 실패로 인해 드롭된 우선순위 0번 트래픽의 패킷 수입니다.</span></span>
+
+# Kernel log shows fallback due to lossless configuration issues
+$ dmesg | tail -n 3
+[mlx5_core] <span class="console-highlight">RoCE PFC verification failed: Switch Lossless path status check FAILED<span class="console-tooltip">PFC Verification Failed: 스위치와 호스트 간 PFC(우선순위 흐름 제어) 튜닝 설정이 일치하지 않아 무손실 네트워크를 생성할 수 없어 커널이 RDMA 연결을 거부했습니다.</span></span>
+[mlx5_core] Warning: Falling back to standard TCP socket transport for GPU peer data.
+[app_gpu] Peer link latency degraded. Baseline 0.12ms (RDMA) -> 4.80ms (TCP socket). Performance dropped by 40x.`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #8b5cf6; margin-right: 6px;"></i><strong>RDMA/RoCE Congestion (PFC Fallback & AI Training Slowdown)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>발생 기전:</strong> 대규모 AI 분산 학습 도중 GPU 노드 간 고속 전송을 지원하는 RoCE 망에 스위치 버퍼가 고갈되었으나, <strong>PFC(Priority Flow Control)</strong> 설정이 양단 간 불일치하거나 비활성화되어 패킷 드랍이 그대로 발생한 현상입니다.</li>
+          <li style="margin-bottom: 6px;"><strong>TCP 폴백:</strong> RDMA 통신은 패킷 유실을 감당할 수 없으므로, 유실 감지 시 즉시 커널 계층의 일반 TCP 소켓 통신으로 강제 폴백(Fallback)됩니다.</li>
+          <li style="margin-bottom: 6px;"><strong>성능 파장:</strong> CPU 복사 오버헤드와 커널 스택 처리 지연이 추가되어 전송 지연 시간(Latency)이 40배 가량 폭증하고 GPU 가동률(GPU Utility)이 급락하여 분산 학습 연산 속도가 처참하게 감소합니다.</li>
+          <li style="margin-bottom: 0;"><strong>장애 대책:</strong> 리프-스파인 스위치 전 구간 및 NIC에 PFC(우선순위 기반 흐름 제어)와 ECN(명시적 혼잡 통보) 설정을 완전 정렬하여 Lossless Ethernet 환경을 견고하게 보장해야 합니다.</li>
+        </ul>
+      `
+    }
+  };
+
   const OVERVIEW_DATA = {
     // --- Linux Troubleshooting Scenarios ---
     "linux-q01-server-slow": {
@@ -788,6 +890,22 @@ http {
         "nginx.conf upstream 블록 및 proxy_pass, X-Forwarded-For 헤더 전송 튜닝",
         "L7 SSL/TLS 복호화 인증서 마운트 및 Ingress 경로 기반(Path-based) 서비스 라우팅 구성",
         "Sticky Cookie 및 세션 타임아웃을 연동한 애플리케이션 상태 유지 기법 설계"
+      ]
+    },
+    "network-q05-packet-loss": {
+      title: "패킷 유실 분석 및 네트워크 트러블슈팅 방법론",
+      icon: "fa-solid fa-triangle-exclamation",
+      summary: "네트워크 패킷 유실의 근본 원인을 파악하기 위한 진단 흐름과 명령어 사용법, 그리고 대규모 연산/스토리지 환경(MTU Black Hole, RDMA PFC)에서의 에러 복구 기법을 다룹니다.",
+      questions: [
+        "패킷 유실률과 RTT 평균값이 모순되게 나타날 때 원인은?",
+        "Jumbo Frame을 사용할 때 발생하는 MTU Mismatch 블랙홀 현상의 원인과 진단 커맨드는?",
+        "RDMA 통신 중 패킷 유실이 감지되어 일반 TCP로 폴백(Fallback)될 때 발생하는 성능 손상과 해결 방법은?"
+      ],
+      skills: [
+        "ping 및 mtr 명령어를 이용한 종단 간 패킷 드랍 및 홉별 유실률 격리 분석",
+        "ip -s link 및 ethtool -S를 통한 NIC 물리 에러(rx_crc_errors) 탐지",
+        "tcpdump 패킷 분석을 이용한 중복 ACK 및 TCP Retransmission(재전송) 이벤트 추적",
+        "RoCE 우선순위 흐름 제어(PFC) 활성화 및 sysfs를 활용한 무손실 이더넷 망 검증"
       ]
     }
   };
@@ -2286,6 +2404,67 @@ $ df -h /dev/sda1
           </div>
         </div>
       `;
+    } else if (doc.id === 'network-q05-packet-loss') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-triangle-exclamation" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          Packet Loss & Retransmission Diagnostic Simulator (패킷 유실 및 재전송 진단 시뮬레이터)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          <!-- Visual diagram row -->
+          <div class="dns-nodes-diagram" id="packetLossNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 160px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; transition: all 0.3s ease;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="packetLossStepGrid" style="grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="congestion" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: hsl(var(--accent)); text-transform: uppercase;">Scenario 1</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-server" style="margin-right:4px;"></i>네트워크 혼잡</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Buffer Queue Overflow</div>
+            </div>
+            <div class="cpu-dial-card" data-step="mtu" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Scenario 2</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-compress" style="margin-right:4px;"></i>MTU 불일치</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Jumbo Frame Blackhole</div>
+            </div>
+            <div class="cpu-dial-card" data-step="crc" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Scenario 3</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-plug" style="margin-right:4px;"></i>물리 에러 (CRC)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Faulty Cable / Noise</div>
+            </div>
+            <div class="cpu-dial-card" data-step="rdma_fallback" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Scenario 4</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-bolt" style="margin-right:4px;"></i>RDMA 폴백</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Lossless PFC Fallback</div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="packetLossTerminalTitle"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i>Diagnostic Console</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 200px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="packetLossConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">장애 기전 및 SRE 분석 대책</span></div>
+                <div class="card-body" id="packetLossAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     // Accordion: Interviewer's Intent
@@ -2992,6 +3171,218 @@ $ df -h /dev/sda1
 
       // Initialize simulator with first step
       updateLbSimulator('l4');
+    }
+
+    // BIND SIMULATOR LOGIC FOR network-q05-packet-loss
+    if (doc.id === 'network-q05-packet-loss') {
+      const plStepCards = document.querySelectorAll('#packetLossStepGrid .cpu-dial-card');
+      const plConsoleOutput = document.getElementById('packetLossConsoleOutput');
+      const plAnalysisText = document.getElementById('packetLossAnalysisText');
+      const plNodesDiagram = document.getElementById('packetLossNodesDiagram');
+      const plTerminalTitle = document.getElementById('packetLossTerminalTitle');
+
+      function updatePacketLossDiagram(stepKey) {
+        let diagramHTML = '';
+        if (stepKey === 'congestion') {
+          diagramHTML = `
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; gap: 12px;">
+              <!-- Client Node -->
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Client</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 192.168.1.50</div>
+              </div>
+              
+              <!-- Client-to-Switch Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #10b981; border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #10b981;"></div>
+                </div>
+              </div>
+              
+              <!-- Switch Node -->
+              <div class="network-node" style="background: rgba(245, 158, 11, 0.05); border: 2px solid #f59e0b; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(245, 158, 11, 0.15); position: relative;">
+                <div style="position: absolute; top: -10px; right: -10px; background: #ef4444; color: #ffffff; border-radius: 4px; padding: 1px 4px; font-size: 0.55rem; font-weight: bold; border: 1.5px solid #1e293b; text-transform: uppercase; animation: pulse 1s infinite;">100% Egress</div>
+                <div style="font-size: 1.1rem; color: #f59e0b; margin-bottom: 4px;"><i class="fa-solid fa-network-wired"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Egress Switch</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">Buffer Full</div>
+              </div>
+              
+              <!-- Switch-to-Server Lane (Packet Drop) -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #ef4444; border-radius: 2px; position: relative; animation: pulse 1s infinite;">
+                  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.55rem; font-weight: bold; color: #ef4444; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid #ef4444; white-space: nowrap;">
+                    <i class="fa-solid fa-triangle-exclamation"></i> dropped 1.2%
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Server Node -->
+              <div class="network-node" style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(239, 68, 68, 0.15);">
+                <div style="font-size: 1.1rem; color: #ef4444; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Web Server</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 10.0.0.21</div>
+              </div>
+            </div>
+            
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#ef4444; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-circle-exclamation"></i> Link Saturation: Switch buffers overflow, dropping packets & causing TCP retransmissions.
+            </div>
+          `;
+        } else if (stepKey === 'mtu') {
+          diagramHTML = `
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; gap: 12px;">
+              <!-- Client Node -->
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 12px; width: 125px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Client (Jumbo)</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">MTU: 9000</div>
+              </div>
+              
+              <!-- Jumbo Packet Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #f59e0b; border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 12px; height: 12px; background-color: #f59e0b; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 10px #f59e0b;"></div>
+                  <div style="position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #f59e0b; font-weight: bold; background: #1e293b; padding: 1px 3px; border-radius: 2px; white-space: nowrap;">9000B Frame</div>
+                </div>
+              </div>
+              
+              <!-- Mid Switch Node -->
+              <div class="network-node" style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 12px; padding: 10px 12px; width: 125px; text-align: center; box-shadow: 0 4px 10px rgba(239, 68, 68, 0.15);">
+                <div style="font-size: 1.1rem; color: #ef4444; margin-bottom: 4px;"><i class="fa-solid fa-ban"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Transit Switch</div>
+                <div style="font-size: 0.65rem; color: #ef4444; font-weight: bold;">MTU: 1500 (DF=1)</div>
+              </div>
+              
+              <!-- Drops Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line dashed-lane" style="width: 100%; height: 2px; position: relative;">
+                  <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.55rem; font-weight: bold; color: #ef4444; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid #ef4444; white-space: nowrap;">
+                    Silent Drop (Blackhole)
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Destination Node -->
+              <div class="network-node" style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 12px; padding: 10px 12px; width: 125px; text-align: center; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.15);">
+                <div style="font-size: 1.1rem; color: #10b981; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Server (Jumbo)</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">MTU: 9000</div>
+              </div>
+            </div>
+            
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#f59e0b; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-circle-question"></i> MTU Mismatch: Packets larger than intermediate MTU are dropped silently because DF (Don't Fragment) is enabled.
+            </div>
+          `;
+        } else if (stepKey === 'crc') {
+          diagramHTML = `
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; gap: 12px;">
+              <!-- Sender Node -->
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Web Server</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">Tx Packets OK</div>
+              </div>
+              
+              <!-- Corrupt Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: linear-gradient(90deg, #10b981, #ef4444); border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #ef4444; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #ef4444;"></div>
+                  <div style="position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 0.55rem; color: #ef4444; font-weight: bold; background: #1e293b; padding: 1px 4px; border-radius: 2px; white-space: nowrap;">Physical Noise / Damage</div>
+                </div>
+              </div>
+              
+              <!-- Receiver Node with CRC Errors -->
+              <div class="network-node" style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 12px; padding: 10px 14px; width: 130px; text-align: center; box-shadow: 0 4px 10px rgba(239, 68, 68, 0.15); position: relative;">
+                <div style="position: absolute; top: -10px; right: -10px; background: #ef4444; color: #ffffff; border-radius: 4px; padding: 1px 4px; font-size: 0.55rem; font-weight: bold; border: 1.5px solid #1e293b; text-transform: uppercase;">CRC ERR</div>
+                <div style="font-size: 1.1rem; color: #ef4444; margin-bottom: 4px;"><i class="fa-solid fa-plug-circle-xmark"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">App Server NIC</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">rx_crc_errors++</div>
+              </div>
+            </div>
+            
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#ef4444; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-bolt-lightning"></i> Physical Layer Error: Noise or cable damage corrupts data bits, forcing the receiving NIC to discard the frame.
+            </div>
+          `;
+        } else if (stepKey === 'rdma_fallback') {
+          diagramHTML = `
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0; gap: 12px;">
+              <!-- GPU Node 1 -->
+              <div class="network-node" style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(139, 92, 246, 0.15);">
+                <div style="font-size: 1.1rem; color: #8b5cf6; margin-bottom: 4px;"><i class="fa-solid fa-microchip"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">GPU Node 1</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">Mellanox NIC</div>
+              </div>
+              
+              <!-- Broken PFC Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 45px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px;">
+                <div class="packet-lane-line dashed-lane" style="width: 100%; height: 2px; position: relative; margin-bottom: 12px;">
+                  <span style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.55rem; color: #ef4444; background: #1e293b; padding: 0 4px; border: 1.5px solid #ef4444; border-radius: 2px; font-weight: bold; white-space: nowrap;">RDMA Fails (No PFC)</span>
+                </div>
+              </div>
+              
+              <!-- TCP Fallback Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 45px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 80px;">
+                <div class="packet-lane-line" style="width: 100%; height: 2px; background: #f59e0b; position: relative;">
+                  <span style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.55rem; color: #f59e0b; background: #1e293b; padding: 0 4px; border: 1.5px solid #f59e0b; border-radius: 2px; font-weight: bold; white-space: nowrap;">TCP Socket (40x Slow)</span>
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #f59e0b; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #f59e0b;"></div>
+                </div>
+              </div>
+              
+              <!-- GPU Node 2 -->
+              <div class="network-node" style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(139, 92, 246, 0.15);">
+                <div style="font-size: 1.1rem; color: #8b5cf6; margin-bottom: 4px;"><i class="fa-solid fa-microchip"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">GPU Node 2</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">TCP Fallback Mode</div>
+              </div>
+            </div>
+            
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#8b5cf6; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-circle-exclamation"></i> RoCE Congestion: Missing PFC settings drop packets under load, triggering a fallback from RDMA to standard TCP socket proxying.
+            </div>
+          `;
+        }
+        return diagramHTML;
+      }
+
+      function updatePacketLossSimulator(stepKey) {
+        const stepData = packetLossSimData[stepKey];
+        if (!stepData) return;
+
+        // Update console title
+        if (plTerminalTitle) {
+          if (stepKey === 'congestion') plTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>tc qdisc statistics & ethtool queue counters';
+          if (stepKey === 'mtu') plTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>ping command MTU diagnostic output';
+          if (stepKey === 'crc') plTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>ip link statistics & ethtool ethernet errors';
+          if (stepKey === 'rdma_fallback') plTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>rdma link & ethtool PFC packet logs';
+        }
+
+        // 1. Update diagram
+        plNodesDiagram.innerHTML = updatePacketLossDiagram(stepKey);
+
+        // 2. Update logs and descriptions
+        plConsoleOutput.innerHTML = stepData.console;
+        plAnalysisText.innerHTML = stepData.analysis;
+      }
+
+      plStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          plStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+          
+          const stepKey = card.dataset.step;
+          updatePacketLossSimulator(stepKey);
+        });
+      });
+
+      // Initialize simulator with first step
+      updatePacketLossSimulator('congestion');
     }
 
     bindStatusSelector(doc.id);
