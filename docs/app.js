@@ -511,6 +511,69 @@ Jun 14 01:14:03 gpu-node-01 app_gpu: Peer link latency degraded. Baseline 0.12ms
     }
   };
 
+  const loadBalancerSimData = {
+    l4: {
+      activeStep: 1,
+      console: `# L4 Load Balancer routing relies on IP and Port (OSI Layer 4)
+# It modifies the packet header directly (NAT) and forwards to upstream.
+
+$ ipvsadm -Ln
+IP Virtual Server version 1.2.1 (modules loaded)
+Prot LocalAddress:Port Scheduler Flags
+  -> RemoteAddress:Port           Forward Weight ActiveConn InActConn
+TCP  <span class="console-highlight">10.0.0.10:443<span class="console-tooltip">L4 VIP (Virtual IP): 외부 사용자가 접속하는 로드 밸런서의 대표 IP 주소 및 포트(TCP 443)입니다.</span></span> rr
+  -> <span class="console-highlight">10.0.0.21:443<span class="console-tooltip">Backend Server A IP: L4 로드 밸런서가 트래픽을 중계할 첫 번째 실물 백엔드 웹 서버의 IP 및 포트 주소입니다.</span></span>           Masq    1      0          0         
+  -> <span class="console-highlight">10.0.0.22:443<span class="console-tooltip">Backend Server B IP: L4 로드 밸런서가 트래픽을 중계할 두 번째 실물 백엔드 웹 서버의 IP 및 포트 주소입니다.</span></span>           Masq    1      0          0         
+
+# tcpdump trace on L4 LB interface:
+# Packet arrived: Source 192.168.1.50:49210 &gt; Dest 10.0.0.10:443 (TCP SYN)
+# Packet forwarded: Source 192.168.1.50:49210 &gt; Dest 10.0.0.21:443 (TCP SYN, <span class="console-highlight correct-flag">Dest IP Rewritten<span class="console-tooltip">DNAT (Destination NAT): L4 LB가 TCP 페이로드는 해독하지 않고 패킷 헤더의 Destination IP를 VIP(10.0.0.10)에서 백엔드 IP(10.0.0.21)로 바꾼 후 즉시 전달하는 메커니즘입니다.</span></span>)`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #0ea5e9; margin-right: 6px;"></i><strong>Layer 4 로드 밸런싱 (Transport Layer 패킷 중계)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>동작 방식 (NAT):</strong> 클라이언트가 L4 LB의 가상 IP(10.0.0.10)로 TCP 연결을 요청하면, L4 LB는 <strong>IP 헤더의 목적지 주소만 실시간으로 Rewriting(DNAT)</strong>하여 백엔드로 바로 바이패스합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>커넥션 수립 개수:</strong> <strong>단 1개의 TCP 커넥션</strong>만 생성됩니다 (Client &leftrightarrow; Backend 직접 통신). L4 LB는 그 사이에서 패킷 헤더 주소만 빠르게 조작해 전달하는 역할만 수행합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>연산 특징:</strong> HTTP 페이로드(URL, 헤더, 쿠키)를 전혀 해석하지 않으므로 오버헤드가 극히 적고 대용량 포워딩 성능이 매우 뛰어납니다.</li>
+          <li style="margin-bottom: 0;"><strong>장애 판별 Point:</strong> L4 장비가 정상인데 응답이 없다면 백엔드 웹 서버의 80/443 포트가 실제로 떠 있는지(<code>ss -tan</code> 리스닝 검사), 혹은 중간 스위치의 방화벽 정책을 검사해야 합니다.</li>
+        </ul>
+      `
+    },
+    l7: {
+      activeStep: 2,
+      console: `# L7 Load Balancer proxy pass config (OSI Layer 7 NGINX)
+# It terminates TCP/SSL, parses HTTP, and routes based on Host/URL.
+
+http {
+    <span class="console-highlight">upstream<span class="console-tooltip">upstream block: L7 로드 밸런서가 역프록시(Reverse Proxy)하여 동적으로 요청을 중계할 백엔드 서버 그룹을 정의합니다.</span></span> api_servers {
+        server 10.0.0.21:8080 max_fails=3 fail_timeout=10s;
+        server 10.0.0.22:8080 max_fails=3 fail_timeout=10s;
+        <span class="console-highlight">sticky cookie srv_id expires 1h<span class="console-tooltip">Sticky Session (세션 고정): 쿠키(srv_id)를 심어서 브라우저 요청이 항상 동일한 백엔드 인스턴스로 전달되도록 고정하는 기능으로, L7에서만 구현 가능합니다.</span></span>;
+    }
+
+    server {
+        listen 443 ssl http2;
+        server_name api.company.com;
+
+        <span class="console-highlight">ssl_certificate /etc/ssl/certs/api.crt;<span class="console-tooltip">SSL/TLS Termination (인증서 종단): 사용자와의 HTTPS 연결을 L7 로드 밸런서에서 끊고 암호화를 해독(Decryption)하여, 백엔드 서버군에는 해독된 평문 HTTP 트래픽으로 안전하고 가볍게 전달하는 기법입니다.</span></span>
+        
+        location /users {
+            <span class="console-highlight correct-flag">proxy_pass http://api_servers;<span class="console-tooltip">proxy_pass (역프록시 중계): /users 경로로 진입한 HTTP 요청을 분석하여 upstream 정의된 백엔드 서버 중 하나로 온전한 HTTP 요청 객체 형식으로 전달합니다. (두 번째 TCP 세션 실행)</span></span>
+            proxy_set_header <span class="console-highlight">X-Forwarded-For<span class="console-tooltip">X-Forwarded-For: L7 LB가 백엔드 서버로 새로 TCP 연결을 맺을 때, 원래 접속을 시도한 클라이언트의 실제 IP(192.168.1.50)를 누락시키지 않기 위해 HTTP 헤더에 실어 전달하는 표준 속성입니다.</span></span> $proxy_add_x_forwarded_for;
+        }
+    }
+}`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: #8b5cf6; margin-right: 6px;"></i><strong>Layer 7 로드 밸런싱 (Application Layer 프록시 중계)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>동작 방식 (Reverse Proxy):</strong> 클라이언트가 L7 LB와 TCP 핸드쉐이크 및 SSL 핸드쉐이크를 맺고 연결을 완전히 끊어냅니다 (TCP Session 1). 이후 들어오는 HTTP 요청 명세(URL, Header, Cookie)를 해석하여 알맞은 백엔드 서비스로 <strong>별도의 신규 TCP 세션을 열어(TCP Session 2)</strong> 프록싱합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>커넥션 수립 개수:</strong> <strong>총 2개의 독립된 TCP 커넥션</strong>이 유지됩니다 (Client &leftrightarrow; L7 LB, L7 LB &leftrightarrow; Backend).</li>
+          <li style="margin-bottom: 6px;"><strong>지능형 기능:</strong> 특정 URL 경로(예: <code>/users</code>)에 따른 경로 분기, 세션 쿠키를 이용한 Sticky Session 유지, SSL/TLS 인증서 복호화(Termination) 등을 완벽히 수행할 수 있습니다.</li>
+          <li style="margin-bottom: 0;"><strong>장애 판별 Point:</strong> 502 Bad Gateway 에러가 나타난다면 L7 LB는 살아 있으나 뒷단 upstream 백엔드 애플리케이션 데몬이 정지되었거나, WAS/컨테이너 네트워크 연동이 단절된 애플리케이션 계층 장애입니다.</li>
+        </ul>
+      `
+    }
+  };
+
   const OVERVIEW_DATA = {
     // --- Linux Troubleshooting Scenarios ---
     "linux-q01-server-slow": {
@@ -709,6 +772,22 @@ Jun 14 01:14:03 gpu-node-01 app_gpu: Peer link latency degraded. Baseline 0.12ms
         "pg_stat_activity 및 pg_locks 조인을 활용한 DB 데드락 및 트랜잭션 exclusive lock 경합 식별",
         "iostat -xz 및 df -h를 활용한 디스크 IOPS 포화도 및 NFS 파일 시스템 마운트 블로킹 분석",
         "RoCE PFC/ECN 혼잡 제어 및 sysfs 설정을 조율한 초고속 RDMA 무손실 전송 상태 교정"
+      ]
+    },
+    "network-q04-l4-vs-l7-load-balancer": {
+      title: "L4 vs L7 로드 밸런서 매커니즘 차이 및 프록싱 구조",
+      icon: "fa-solid fa-code-branch",
+      summary: "전송 계층(L4)과 애플리케이션 계층(L7) 로드 밸런서의 동작 방식 차이, TCP 세션 종단 유무, HTTP 페이로드 기반 라우팅 및 SSL 복호화 등의 아키텍처적 장단점을 검증합니다.",
+      questions: [
+        "L4 로드 밸런서의 패킷 레벨 포워딩(NAT/DSR)과 L7 로드 밸런서의 Reverse Proxy 중 RTT 지연이 더 낮은 방식은?",
+        "L7 Ingress Controller가 SSL/TLS Termination(종단)을 수행할 때 백엔드 애플리케이션이 얻는 성능상 이점은?",
+        "클라이언트의 원본 IP를 유실하지 않기 위해 L7 로드 밸런서가 백엔드 서버로 전달하는 HTTP 헤더와 속성은 무엇인가?"
+      ],
+      skills: [
+        "ipvsadm 및 iptables를 활용한 L4 패킷 포워딩 및 커널 기반 분배 설정 모니터링",
+        "nginx.conf upstream 블록 및 proxy_pass, X-Forwarded-For 헤더 전송 튜닝",
+        "L7 SSL/TLS 복호화 인증서 마운트 및 Ingress 경로 기반(Path-based) 서비스 라우팅 구성",
+        "Sticky Cookie 및 세션 타임아웃을 연동한 애플리케이션 상태 유지 기법 설계"
       ]
     }
   };
@@ -2156,6 +2235,57 @@ $ df -h /dev/sda1
           </div>
         </div>
       `;
+    } else if (doc.id === 'network-q04-l4-vs-l7-load-balancer') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-code-branch" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          L4 vs L7 Load Balancer Visual Flow Simulator (L4 vs L7 로드 밸런서 비교 시뮬레이터)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          <!-- Visual diagram row -->
+          <div class="dns-nodes-diagram" id="lbNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 160px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; transition: all 0.3s ease;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="lbStepGrid" style="grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="l4" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: hsl(var(--accent)); text-transform: uppercase;">Transport Layer (L4)</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-network-wired" style="margin-right:4px;"></i>L4 패킷 포워딩</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Layer 4 connection routing</div>
+            </div>
+            <div class="cpu-dial-card" data-step="l7" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Application Layer (L7)</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-server" style="margin-right:4px;"></i>L7 세션 프록시</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Layer 7 reverse proxying</div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="lbTerminalTitle"><i class="fa-solid fa-terminal" style="margin-right:6px;"></i>Load Balancer Command Output</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 200px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="lbConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">프록시 중계 방식 및 커넥션 분석</span></div>
+                <div class="card-body" id="lbAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     // Accordion: Interviewer's Intent
@@ -2713,6 +2843,155 @@ $ df -h /dev/sda1
 
       // Initialize simulator with first scenario
       updateLatencySimulator('packet_loss');
+    }
+
+    // BIND SIMULATOR LOGIC FOR network-q04-l4-vs-l7-load-balancer
+    if (doc.id === 'network-q04-l4-vs-l7-load-balancer') {
+      const lbStepCards = document.querySelectorAll('#lbStepGrid .cpu-dial-card');
+      const lbConsoleOutput = document.getElementById('lbConsoleOutput');
+      const lbAnalysisText = document.getElementById('lbAnalysisText');
+      const lbNodesDiagram = document.getElementById('lbNodesDiagram');
+      const lbTerminalTitle = document.getElementById('lbTerminalTitle');
+
+      function updateLbDiagram(stepKey) {
+        let diagramHTML = '';
+        if (stepKey === 'l4') {
+          diagramHTML = `
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+              <!-- Client Node -->
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Client</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 192.168.1.50</div>
+              </div>
+              
+              <!-- Session Connection Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 12px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: linear-gradient(90deg, #0ea5e9, #f59e0b); border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #f59e0b; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #f59e0b;"></div>
+                  <div class="packet-direction-arrow" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.55rem; font-weight: bold; color: #cbd5e1; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid var(--border-color); white-space: nowrap;">
+                    IP/Port Rewritten (NAT)
+                  </div>
+                </div>
+              </div>
+              
+              <!-- L4 LB Node -->
+              <div class="network-node" style="background: rgba(245, 158, 11, 0.05); border: 2px solid #f59e0b; border-radius: 12px; padding: 10px 14px; width: 125px; text-align: center; box-shadow: 0 4px 10px rgba(245, 158, 11, 0.15);">
+                <div style="font-size: 1.1rem; color: #f59e0b; margin-bottom: 4px;"><i class="fa-solid fa-network-wired"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">L4 NLB (VIP)</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 10.0.0.10</div>
+              </div>
+              
+              <!-- Forwarding Connection Lane -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 12px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: linear-gradient(90deg, #f59e0b, #10b981); border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #10b981;"></div>
+                  <div class="packet-direction-arrow" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.55rem; font-weight: bold; color: #cbd5e1; background: #1e293b; padding: 1px 4px; border-radius: 3px; border: 1px solid var(--border-color); white-space: nowrap;">
+                    Direct Pass-through
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Backend Server A -->
+              <div class="network-node" style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 12px; padding: 10px 14px; width: 120px; text-align: center; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.15);">
+                <div style="font-size: 1.1rem; color: #10b981; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Nginx Web A</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 10.0.0.21</div>
+              </div>
+            </div>
+            
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#f59e0b; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-circle-check"></i> Client-to-Backend Direct Session (1 TCP Connection)
+            </div>
+          `;
+        } else if (stepKey === 'l7') {
+          diagramHTML = `
+            <div class="network-nodes-row" style="width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+              <!-- Client Node -->
+              <div class="network-node" style="background: rgba(14, 165, 233, 0.05); border: 2px solid #0ea5e9; border-radius: 12px; padding: 10px 14px; width: 110px; text-align: center; box-shadow: 0 4px 10px rgba(14, 165, 233, 0.15);">
+                <div style="font-size: 1.1rem; color: #0ea5e9; margin-bottom: 4px;"><i class="fa-solid fa-laptop"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">Client</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">192.168.1.50</div>
+              </div>
+              
+              <!-- Session 1: Client to LB -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #8b5cf6; border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #8b5cf6; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #8b5cf6;"></div>
+                  <div class="packet-direction-arrow" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.5rem; font-weight: bold; color: #f8fafc; background: #8b5cf6; padding: 1px 3px; border-radius: 2px; white-space: nowrap;">
+                    TCP Session 1 (HTTPS)
+                  </div>
+                </div>
+              </div>
+              
+              <!-- L7 LB Node -->
+              <div class="network-node" style="background: rgba(139, 92, 246, 0.05); border: 2px solid #8b5cf6; border-radius: 12px; padding: 10px 8px; width: 140px; text-align: center; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.2); position: relative;">
+                <div style="position: absolute; top: -10px; right: -10px; background: #8b5cf6; color: #ffffff; border-radius: 4px; padding: 1px 4px; font-size: 0.55rem; font-weight: bold; border: 1.5px solid #1e293b; text-transform: uppercase;">SSL TERM</div>
+                <div style="font-size: 1.1rem; color: #8b5cf6; margin-bottom: 4px;"><i class="fa-solid fa-shield-halved"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">L7 Ingress (Nginx)</div>
+                <div style="font-size: 0.6rem; color: #cbd5e1; font-family: var(--font-mono); margin-top:2px;">URL Path: /users</div>
+              </div>
+              
+              <!-- Session 2: LB to Backend -->
+              <div class="packet-lane-wrapper" style="flex-grow: 1; margin: 0 8px; position: relative; height: 36px; display: flex; align-items: center; justify-content: center; min-width: 60px;">
+                <div class="packet-lane-line" style="width: 100%; height: 4px; background: #10b981; border-radius: 2px; position: relative;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; top: 50%; left: 0%; transform: translate(-50%, -50%); box-shadow: 0 0 8px #10b981;"></div>
+                  <div class="packet-direction-arrow" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.5rem; font-weight: bold; color: #f8fafc; background: #10b981; padding: 1px 3px; border-radius: 2px; white-space: nowrap;">
+                    TCP Session 2 (HTTP)
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Backend Pod -->
+              <div class="network-node" style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 12px; padding: 10px 14px; width: 110px; text-align: center; box-shadow: 0 4px 10px rgba(16, 185, 129, 0.15);">
+                <div style="font-size: 1.1rem; color: #10b981; margin-bottom: 4px;"><i class="fa-solid fa-server"></i></div>
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-primary);">User Pod A</div>
+                <div style="font-size: 0.65rem; color: var(--text-secondary);">IP: 10.0.0.21</div>
+              </div>
+            </div>
+            
+            <div style="width:100%; text-align:center; font-size:0.75rem; color:#8b5cf6; font-weight:bold; margin-top:8px;">
+              <i class="fa-solid fa-circle-nodes"></i> Terminated proxy sessions (2 Independent TCP Connections)
+            </div>
+          `;
+        }
+        return diagramHTML;
+      }
+
+      function updateLbSimulator(stepKey) {
+        const stepData = loadBalancerSimData[stepKey];
+        if (!stepData) return;
+
+        // Update console title
+        if (lbTerminalTitle) {
+          if (stepKey === 'l4') lbTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>L4 ipvsadm routing rules & tcpdump';
+          if (stepKey === 'l7') lbTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>L7 nginx.conf reverse proxy configuration';
+        }
+
+        // 1. Update diagram
+        lbNodesDiagram.innerHTML = updateLbDiagram(stepKey);
+
+        // 2. Update logs and descriptions
+        lbConsoleOutput.innerHTML = stepData.console;
+        lbAnalysisText.innerHTML = stepData.analysis;
+      }
+
+      lbStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          lbStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+          
+          const stepKey = card.dataset.step;
+          updateLbSimulator(stepKey);
+        });
+      });
+
+      // Initialize simulator with first step
+      updateLbSimulator('l4');
     }
 
     bindStatusSelector(doc.id);
