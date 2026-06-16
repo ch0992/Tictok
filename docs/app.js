@@ -921,6 +921,65 @@ $ watch -n 1 nvidia-smi dmon -s u
     }
   };
 
+  const distTrainingSimData = {
+    tcp: {
+      console: `# PyTorch Distributed Training with TCP backend (No RDMA)
+# 1. Start distributed training script
+$ python3 -m torch.distributed.run --nproc_per_node=8 --nnodes=4 main.py
+[gpu01] PyTorch distributed group initialized. Backend: gloo (TCP sockets)
+[gpu01] NCCL INFO: Using standard TCP sockets for inter-node communication
+
+# 2. Host CPU profiling - heavy software interrupts (softirq)
+$ mpstat -P ALL 1
+CPU    %usr   %sys   %soft   %idle
+all    15.2   <span class="console-highlight">28.4</span>    <span class="console-highlight">18.5</span>   37.9  <span class="console-highlight">(High softirq & kernel CPU load)<span class="console-tooltip">softirq: 네트워크 패킷 처리를 위해 CPU가 소프트웨어 인터럽트를 과다 점유하고 있으며, 소켓 버퍼 데이터 복사 연산(%sys)으로 인해 시스템 리소스가 매우 높게 치솟아 연산 처리가 지체되고 있습니다.</span></span>
+
+# 3. Training speed stats - Heavy GPU Synchronization Stalls
+$ tail -f training.log
+[INFO] Epoch 1, Step 100: time=420ms/step <span class="console-highlight">(GPU Idle Wait: 380ms)</span>
+[INFO] Epoch 1, Step 200: time=425ms/step <span class="console-highlight">(GPU Idle Wait: 385ms)</span>
+[INFO] Epoch 1, Step 300: time=418ms/step <span class="console-highlight">(GPU Idle Wait: 378ms)</span>
+<span class="console-tooltip">GPU Idle Wait: 매 훈련 스텝마다 가중치 동기화(AllReduce)를 위해 다른 GPU 노드들이 데이터를 다 받을 때까지 대기하며 유휴 상태(Stall)에 빠진 시간입니다. 전체 스텝의 90% 이상을 전송 대기로 소모하고 있습니다.</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation" style="color: #ef4444; margin-right: 6px;"></i><strong>TCP 기반 분산 학습 통신 병목 현상</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>커널 TCP 소켓 오버헤드:</strong> 각 스텝 종료 시점에 GPU 메모리의 그래디언트 데이터를 호스트 메모리로 복사하고, 다시 커널 소켓 버퍼를 경유해 TCP/IP 스택(체크섬 계산, 패킷 분할)을 통과하는 과정에서 CPU와 메모리 버스 오버헤드가 극대화됩니다.</li>
+          <li style="margin-bottom: 6px;"><strong>CPU 스레드 포화 및 컨텍스트 스위칭:</strong> 네트워크 softirq 핸들러와 네트워크 시스템 콜이 CPU 코어를 선점하여 원천 훈련 데이터 준비(Data Loader Pipeline) 속도마저 악화시킵니다.</li>
+          <li style="margin-bottom: 6px;"><strong>동기화 지연(Stall) 심화:</strong> 패킷 왕복 시간(RTT)이 약 10~50us 이상 지속됨에 따라 AllReduce 연산 완수가 수백 밀리초 단위로 지체되고, GPU 가동률(SM Utility)은 18% 미만으로 폭락합니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 모니터링:</strong> 학습 로그에 기록되는 step time이 비정상적으로 길고, 호스트 시스템의 softirq 비율 및 네트워크 수신 버퍼 대기(netstat)가 누적된다면 대표적인 네트워킹 통신 병목 징후입니다.</li>
+        </ul>
+      `
+    },
+    rdma: {
+      console: `# PyTorch Distributed Training with RDMA backend (NCCL over RoCEv2)
+# 1. Start distributed training script
+$ python3 -m torch.distributed.run --nproc_per_node=8 --nnodes=4 main.py
+[gpu01] PyTorch distributed group initialized. Backend: nccl (RDMA active)
+[gpu01] NCCL INFO: Using GPUDirect RDMA (GDR) - Direct GPU HBM to NIC memory access
+
+# 2. Host CPU profiling - Zero-Copy CPU Offloaded
+$ mpstat -P ALL 1
+CPU    %usr   %sys   %soft   %idle
+all     8.2    <span class="console-highlight">0.12</span>   <span class="console-highlight">0.05</span>   91.6  <span class="console-highlight">(Zero network softirq & near-zero CPU load)<span class="console-tooltip">sys/soft: RDMA 네이티브 하드웨어 처리(Kernel Bypass)를 통해 호스트의 CPU 간섭 및 복사 연산이 완전히 제거되어 네트워크 점유 부하가 0%대에 수렴합니다.</span></span>
+
+# 3. Training speed stats - Smooth Pipeline with Minimal Stall
+$ tail -f training.log
+[INFO] Epoch 1, Step 100: time=12ms/step <span class="console-highlight">(GPU Idle Wait: 0.8ms)</span>
+[INFO] Epoch 1, Step 200: time=12ms/step <span class="console-highlight">(GPU Idle Wait: 0.7ms)</span>
+[INFO] Epoch 1, Step 300: time=11.8ms/step <span class="console-highlight">(GPU Idle Wait: 0.6ms)</span>
+<span class="console-tooltip">GPU Idle Wait: GPUDirect RDMA와 Quantum-2 스위치의 무손실 라우팅 성능 덕분에 노드 간 가중치 병합 연산이 1밀리초 미만에 완료되어 GPU가 멈춤 없이 전속력(94% 가동률)으로 계산을 이어갑니다.</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-check" style="color: #10b981; margin-right: 6px;"></i><strong>RDMA / RoCEv2 기반 분산 학습 고속화 원리</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0;">
+          <li style="margin-bottom: 6px;"><strong>GPUDirect RDMA (GDR):</strong> GPU 메모리(HBM) 주소를 RNIC 카드가 직접 PCIe 버스로 제어하여 메모리 복사 횟수를 0회(Zero-Copy)로 줄이고 호스트 CPU/커널 단계를 완전히 바이패스(Kernel Bypass)합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>CPU 리소스 해방:</strong> 네트워킹 작업에 필요한 인터럽트 및 스택 처리가 NIC 실리콘 단으로 오프로드(Offloading)되어, 남은 호스트 CPU 연산력을 데이터 전처리 및 증강(Data Augmentation)에 100% 쏟아부을 수 있습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>초저지연 고가동:</strong> RTT 지연 속도가 1마이크로초 미만으로 제어되어 대규모 클러스터 AllReduce 동기화 대기 정체 현상이 사라지고, GPU 코어가 쉼 없이 가동될 수 있습니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 모니터링:</strong> \`nvidia-smi dmon\`으로 실측하는 GPU 가동률(SM Active)이 90% 이상으로 유지되며, NCCL 디버그 로그에서 \`GPUDirect RDMA active\` 및 \`ring/tree connection successfully established via RoCE\` 상태가 일관되게 포착됩니다.</li>
+        </ul>
+      `
+    }
+  };
+
   const OVERVIEW_DATA = {
     // --- Linux Troubleshooting Scenarios ---
     "linux-q01-server-slow": {
@@ -1215,6 +1274,22 @@ $ watch -n 1 nvidia-smi dmon -s u
         "Slurm 잡 관리자 및 Kubernetes GPU 토폴로지 자원 분배 실무 설정 진단",
         "분산 연산구간 네트워크 RTT 지연 스파이크 분석 및 RDMA 패브릭 최적화",
         "End-to-End 데이터 파이프라인의 에포크(Epoch) 데이터 로딩 지연 원인 프로파일링"
+      ]
+    },
+    "gpu-q05-distributed-training": {
+      title: "분산 학습 네트워킹 및 AllReduce 통신 병목 제어",
+      icon: "fa-solid fa-network-wired",
+      summary: "거대 AI 모델의 병렬 학습 수행 시 가중치 및 그래디언트를 교환하는 AllReduce 분산 연산의 구조적 중요성과, TCP 대신 고성능 RDMA/RoCEv2 및 인피니밴드 네트워크망을 구축해야 하는 기술적 당위성을 비교 다룹니다.",
+      questions: [
+        "분산 딥러닝 환경에서 GPU 연산 주기와 통신 주기 간 동기화 정체(Stall) 현상의 유발 원리는?",
+        "AllReduce 집합 통신 프로토콜의 분산 처리 메커니즘과 링/트리 토폴로지 튜닝 기전은?",
+        "RDMA 네트워킹 도입 시 호스트 OS 스택 단에서 단축되는 Latency와 CPU 오버헤드의 실측 비교 원리는?"
+      ],
+      skills: [
+        "PyTorch Distributed 및 NCCL 환경 디버그 로그(NCCL_DEBUG=INFO) 프로파일링",
+        "nvidia-smi 및 Mellanox NIC 통계 도구를 활용한 분산 네트워킹 전송 효율 측정",
+        "커널 TCP 소켓 전송 softirq 소프트인터럽트 점유 부하와 RDMA Kernel Bypass 실시간 리소스 비교",
+        "대형 모델 병렬화 분산 확장 시 Linear Scaling 선형 확장을 가로막는 Straggler 병목 지점 해소"
       ]
     }
   };
@@ -4032,6 +4107,88 @@ $ df -h /dev/sda1
           </div>
         </div>
       `;
+    } else if (doc.id === 'gpu-q05-distributed-training') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-network-wired" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          Distributed Training Parameter Synchronization Simulator (분산 학습 파라미터 동기화 시뮬레이터)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          
+          <!-- Visual flow diagram (Ring topology or interconnect nodes) -->
+          <div class="dns-nodes-diagram" id="distNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 200px; display: flex; align-items: center; justify-content: center; gap: 16px; transition: all 0.3s ease; flex-wrap: wrap;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive selector grid -->
+          <div class="cpu-dial-grid" id="distStepGrid" style="grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="rdma" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: #10b981; text-transform: uppercase;">GPUDirect RDMA (GDR) Mode</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-bolt" style="margin-right:4px;"></i>RDMA 가속 모드 (Zero-Copy)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">NCCL RoCEv2, Step: 12ms, GPU Util: 94%, CPU: 0.1%</div>
+            </div>
+            <div class="cpu-dial-card" data-step="tcp" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: #ef4444; text-transform: uppercase;">Standard TCP Socket Mode</div>
+              <div style="font-weight: 700; font-size: 1.05rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-server" style="margin-right:4px;"></i>TCP 소켓 모드 (커널 개입)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Gloo Socket, Step: 420ms, GPU Util: 18%, CPU: 28%</div>
+            </div>
+          </div>
+          
+          <!-- Stats Panel -->
+          <div style="display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;">
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #10b981;"><i class="fa-solid fa-stopwatch"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Step Time (학습 속도)</div>
+                <div id="distStepTimeVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #10b981; margin-top: 2px;">12 ms</div>
+              </div>
+            </div>
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: hsl(var(--accent));"><i class="fa-solid fa-microchip"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">GPU SM Active (가동률)</div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                  <div style="flex-grow: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden;">
+                    <div id="distGpuBar" style="width: 94%; height: 100%; background: #10b981; transition: all 0.5s ease;"></div>
+                  </div>
+                  <span id="distGpuVal" style="font-size: 0.85rem; font-family: var(--font-mono); font-weight: bold; width: 45px; text-align: right;">94%</span>
+                </div>
+              </div>
+            </div>
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #f59e0b;"><i class="fa-solid fa-circle-nodes"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Sync Wait (동기화 정체)</div>
+                <div id="distSyncVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #10b981; margin-top: 2px;">3% (Near Zero)</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="distTerminalTitle"><i class="fa-solid fa-code" style="margin-right:6px;"></i>PyTorch & NCCL Distributed Interface Console</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 200px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="distConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            
+            <div class="layout-right" style="flex:1 1 350px;">
+              <div class="study-card" style="margin-bottom:0; height:100%;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">네트워크 전송 오프로드 및 성능 분석</span></div>
+                <div class="card-body" id="distAnalysisText" style="line-height:1.6; font-size:0.9rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
     }
 
     // Accordion: Interviewer's Intent
@@ -4787,6 +4944,147 @@ $ df -h /dev/sda1
 
       // Initialize
       updateClusterSimulator('single');
+    } else if (doc.id === 'gpu-q05-distributed-training') {
+      const distStepCards = document.querySelectorAll('#distStepGrid .cpu-dial-card');
+      const distNodesDiagram = document.getElementById('distNodesDiagram');
+      const distStepTimeVal = document.getElementById('distStepTimeVal');
+      const distGpuBar = document.getElementById('distGpuBar');
+      const distGpuVal = document.getElementById('distGpuVal');
+      const distSyncVal = document.getElementById('distSyncVal');
+      const distConsoleOutput = document.getElementById('distConsoleOutput');
+      const distAnalysisText = document.getElementById('distAnalysisText');
+      const distTerminalTitle = document.getElementById('distTerminalTitle');
+
+      function updateDistTrainingDiagram(modeKey) {
+        let arrowColor = modeKey === 'rdma' ? '#10b981' : '#ef4444';
+        let gpuColor = modeKey === 'rdma' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)';
+        let gpuBorder = modeKey === 'rdma' ? '#10b981' : '#f59e0b';
+        let gpuText = modeKey === 'rdma' ? '#10b981' : '#f59e0b';
+
+        let cpuBg = modeKey === 'rdma' ? 'rgba(71, 85, 105, 0.2)' : 'rgba(239, 68, 68, 0.15)';
+        let cpuBorder = modeKey === 'rdma' ? '#475569' : '#ef4444';
+        let cpuText = modeKey === 'rdma' ? 'var(--text-secondary)' : '#ef4444';
+
+        let nicBg = modeKey === 'rdma' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)';
+        let nicBorder = modeKey === 'rdma' ? '#10b981' : '#f59e0b';
+        let nicText = modeKey === 'rdma' ? '#10b981' : '#f59e0b';
+
+        let html = `
+          <div style="width: 100%; display: flex; flex-direction: column; align-items: center;">
+            <div style="display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; flex-wrap: wrap;">
+        `;
+
+        for (let i = 1; i <= 4; i++) {
+          html += `
+            <div style="background: rgba(30, 41, 59, 0.4); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; width: 140px; display: flex; flex-direction: column; gap: 6px; position: relative;">
+              <div style="font-size: 0.65rem; color: var(--text-secondary); text-align: center; font-weight: bold; text-transform: uppercase;">Node 0${i} (gpu0${i})</div>
+              
+              <!-- GPU HBM Box -->
+              <div style="background: ${gpuColor}; border: 1px solid ${gpuBorder}; border-radius: 4px; padding: 4px; font-size: 0.75rem; text-align: center; font-weight: bold; color: ${gpuText}; display: flex; align-items: center; justify-content: center; gap: 4px;">
+                <i class="fa-solid fa-microchip"></i> GPU HBM
+              </div>
+              
+              <!-- CPU / Host RAM Box -->
+              <div style="background: ${cpuBg}; border: 1px solid ${cpuBorder}; border-radius: 4px; padding: 4px; font-size: 0.7rem; text-align: center; font-weight: bold; color: ${cpuText}; position: relative; transition: all 0.3s; display: flex; align-items: center; justify-content: center; gap: 4px;">
+                <i class="fa-solid fa-server"></i> Host CPU/RAM
+                ${modeKey === 'tcp' ? '<span style="position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; font-size: 0.5rem; padding: 1px 3px; border-radius: 3px; animation: pulseEstablished 0.6s infinite; font-weight: bold;">softirq!</span>' : ''}
+              </div>
+              
+              <!-- PCIe Connector Link -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; margin: -2px 0;">
+                <div style="width: 2px; height: 10px; background: ${modeKey === 'rdma' ? '#10b981' : '#f59e0b'};"></div>
+                ${modeKey === 'rdma' ? '<div style="font-size: 0.55rem; color: #10b981; font-weight: bold; transform: scale(0.8);">Bypass CPU</div>' : '<div style="font-size: 0.55rem; color: #ef4444; font-weight: bold; transform: scale(0.8);">Copy Path</div>'}
+                <div style="width: 2px; height: 10px; background: ${modeKey === 'rdma' ? '#10b981' : '#f59e0b'};"></div>
+              </div>
+
+              <!-- NIC Box -->
+              <div style="background: ${nicBg}; border: 1px solid ${nicBorder}; border-radius: 4px; padding: 4px; font-size: 0.75rem; text-align: center; font-weight: bold; color: ${nicText}; display: flex; align-items: center; justify-content: center; gap: 4px;">
+                <i class="fa-solid fa-network-wired"></i> NIC (mlx5_0)
+              </div>
+            </div>
+          `;
+
+          if (i < 4) {
+            html += `
+              <div style="font-size: 1.2rem; color: ${arrowColor}; display: flex; align-items: center; justify-content: center; height: 100%; min-width: 20px; animation: ${modeKey === 'rdma' ? 'pulseEstablished 0.8s infinite' : 'none'};">
+                <i class="fa-solid fa-circle-arrow-right"></i>
+              </div>
+            `;
+          }
+        }
+
+        html += `
+            </div>
+            
+            <!-- Ring Return Line -->
+            <div style="width: calc(100% - 150px); display: flex; justify-content: center; align-items: center; margin-top: 16px;">
+              <div style="border-left: 2px dashed ${arrowColor}; border-bottom: 2px dashed ${arrowColor}; border-right: 2px dashed ${arrowColor}; width: 100%; height: 24px; border-radius: 0 0 12px 12px; position: relative;">
+                <div style="position: absolute; left: 50%; bottom: -9px; transform: translateX(-50%); font-size: 0.65rem; background: var(--card-bg); padding: 0 12px; color: ${arrowColor}; font-weight: bold; white-space: nowrap; display: flex; align-items: center; gap: 6px;">
+                  <i class="fa-solid fa-circle-arrow-left"></i> Ring-AllReduce Return Path (GPU 04 &rarr; GPU 01)
+                </div>
+              </div>
+            </div>
+            
+            <!-- Overall Status Badge -->
+            <div style="margin-top: 20px; font-size: 0.8rem; font-weight: bold; color: ${modeKey === 'rdma' ? '#10b981' : '#ef4444'}; display: flex; align-items: center; gap: 6px; text-align: center;">
+              ${modeKey === 'rdma' 
+                ? '<i class="fa-solid fa-circle-check"></i> GPUDirect RDMA Active: Direct PCIe peer-to-peer memory access bypasses host OS kernel.' 
+                : '<i class="fa-solid fa-triangle-exclamation"></i> Standard TCP Active: Double socket copies (GPU-to-Host, Host-to-Socket) and CPU softirqs trigger serialization stalls.'}
+            </div>
+          </div>
+        `;
+
+        return html;
+      }
+
+      function updateDistTrainingSimulator(modeKey) {
+        const modeData = distTrainingSimData[modeKey];
+        if (!modeData) return;
+
+        if (modeKey === 'rdma') {
+          distTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>SRE Diagnostics - NCCL GPUDirect RDMA (Kernel Bypass)';
+          distStepTimeVal.textContent = '12 ms';
+          distStepTimeVal.style.color = '#10b981';
+          distGpuBar.style.width = '94%';
+          distGpuBar.style.background = '#10b981';
+          distGpuVal.textContent = '94%';
+          distGpuVal.style.color = '#10b981';
+          distSyncVal.textContent = '3% (Near Zero)';
+          distSyncVal.style.color = '#10b981';
+        } else {
+          distTerminalTitle.innerHTML = '<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>SRE Diagnostics - Gloo TCP Socket Backend (Softirq Stalls)';
+          distStepTimeVal.textContent = '420 ms';
+          distStepTimeVal.style.color = '#ef4444';
+          distGpuBar.style.width = '18%';
+          distGpuBar.style.background = '#ef4444';
+          distGpuVal.textContent = '18%';
+          distGpuVal.style.color = '#ef4444';
+          distSyncVal.textContent = '90% (Heavy Stall)';
+          distSyncVal.style.color = '#ef4444';
+        }
+
+        distNodesDiagram.innerHTML = updateDistTrainingDiagram(modeKey);
+        distConsoleOutput.innerHTML = modeData.console;
+        distAnalysisText.innerHTML = modeData.analysis;
+      }
+
+      distStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          distStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          let color = card.dataset.step === 'rdma' ? '#10b981' : '#ef4444';
+          card.querySelector('div:first-child').style.color = color;
+
+          const modeKey = card.dataset.step;
+          updateDistTrainingSimulator(modeKey);
+        });
+      });
+
+      // Initialize
+      updateDistTrainingSimulator('rdma');
     }
 
     bindStatusSelector(doc.id);
