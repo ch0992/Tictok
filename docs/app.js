@@ -980,6 +980,156 @@ $ tail -f training.log
     }
   };
 
+  const k8sSimData = {
+    scope: {
+      console: `# [Step 1] Determine Blast Radius (장애 영향 범위 확인)
+$ kubectl get nodes
+NAME       STATUS    ROLES           AGE    VERSION
+master-01  <span class="console-healthy">Ready</span>     control-plane   284d   v1.28.2
+node-01    <span class="console-healthy">Ready</span>     worker          284d   v1.28.2
+node-02    <span class="console-critical">NotReady</span>  worker          284d   v1.28.2  <span class="console-tooltip">NotReady: node-02 워커 노드만 유일하게 NotReady 상태로 떨어졌습니다. 다른 노드와 마스터 노드는 모두 Ready 상태를 유지하고 있으므로, VPC 네트워크 전체 장애나 AZ 중단이 아닌 node-02 장치 개별 수준의 장애로 판별됩니다.</span>
+node-03    <span class="console-healthy">Ready</span>     worker          284d   v1.28.2
+node-04    <span class="console-healthy">Ready</span>     worker          284d   v1.28.2`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-info" style="color: hsl(var(--accent)); margin-right: 6px;"></i><strong>1단계: 장애 범위(Blast Radius) 격리</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0; line-height: 1.6;">
+          <li style="margin-bottom: 6px;"><strong>단일 노드 장애 확인:</strong> 전체 4대 노드 중 <code>node-02</code>만 <code>NotReady</code> 상태입니다.</li>
+          <li style="margin-bottom: 6px;"><strong>가설 범위 축소:</strong> 클러스터 전체 통신 마비나 클라우드 제공업체(AWS/Azure)의 특정 리전 장애가 아님을 시사합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>우선 대응 행동:</strong> 즉각적인 cordon 조치(<code>kubectl cordon node-02</code>)를 취하여, 장애 노드로 신규 워크로드가 스케줄링되는 것을 차단하고 개별 노드 내부 분석으로 범위를 고립시킵니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 모니터링 팁:</strong> 장애 인지 즉시 해당 노드 상의 중요 서비스 파드들이 타 노드로 자동 Evict 되기 전까지의 서비스 성능 저하 여부를 관제 보드에서 실시간 검사합니다.</li>
+        </ul>
+      `
+    },
+    conditions: {
+      console: `# [Step 2] Inspect Node Conditions (노드 상태 메트릭 필드 분석)
+$ kubectl describe node node-02
+Name:               node-02
+Roles:              worker
+Conditions:
+  Type                 Status    LastHeartbeatTime                 Reason                  Message
+  ----                 ------    -----------------                 ------                  -------
+  NetworkUnavailable   <span class="console-healthy">False</span>     Tue, 16 Jun 2026 02:10:00 EST     RouteCreated            RouteController created a route
+  MemoryPressure       <span class="console-healthy">False</span>     Tue, 16 Jun 2026 02:11:00 EST     KubeletHasSufficientMem kubelet has sufficient memory
+  DiskPressure         <span class="console-critical">True</span>      Tue, 16 Jun 2026 02:11:05 EST     KubeletHasDiskPressure  <span class="console-highlight">Kubelet has disk pressure</span>
+  PIDPressure          <span class="console-healthy">False</span>     Tue, 16 Jun 2026 02:11:00 EST     KubeletHasSufficientPID kubelet has sufficient PIDs
+  Ready                <span class="console-critical">False</span>     Tue, 16 Jun 2026 02:11:05 EST     KubeletNotReady         <span class="console-highlight">kubelet is posting ready status.</span>
+<span class="console-tooltip">DiskPressure: True 상태는 노드에 디스크 여유 공간이 임계값(보통 10~15% 미만) 아래로 고갈되어 Kubelet이 긴급 상태에 진입했음을 표시합니다. 이로 인해 Ready 조건이 False로 변경되었습니다.</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-triangle-exclamation" style="color: #f59e0b; margin-right: 6px;"></i><strong>2단계: Node Conditions 분석 결과</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0; line-height: 1.6;">
+          <li style="margin-bottom: 6px;"><strong>DiskPressure 감지:</strong> Kubelet이 노드 파일시스템 포화를 감지하고 <code>DiskPressure=True</code> 플래그를 세웠습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>Ready=False 트리거 연쇄 반응:</strong> 디스크 임계 공간이 한계에 다다르면 Kubelet은 오동작 방지를 위해 스스로를 비정상 상태(NotReady)로 전환하여 마스터의 스케줄링 풀에서 노드를 퇴출합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>기타 지표 체크:</strong> MemoryPressure와 PIDPressure는 정상(False)인 것으로 보아 메모리 누수나 포크 폭탄(Fork Bomb) 장애는 배제됩니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 분석:</strong> 호스트 파일시스템의 잔여 공간 부족이 1순위 용의자입니다. 다음으로 노드에 SSH 로그인하여 Kubelet 및 컨테이너 런타임의 로그와 여유 하드 디스크 공간을 검증해야 합니다.</li>
+        </ul>
+      `
+    },
+    kubelet: {
+      console: `# [Step 3] Verify Kubelet Daemon (Kubelet 데몬 작동 및 로그 분석)
+$ ssh admin@node-02
+$ systemctl status kubelet
+● kubelet.service - Kubernetes Kubelet Server
+   Loaded: loaded (/lib/systemd/system/kubelet.service; enabled; vendor preset: enabled)
+   Active: <span class="console-healthy">active (running)</span> since Mon 2026-06-15 12:00:00 EST; 14h ago
+   Main PID: 341829 (kubelet)
+   Tasks: 42 (limit: 4915)
+   Memory: 180.2M
+
+$ journalctl -u kubelet -n 3 --no-pager
+Jun 16 02:11:05 node-02 kubelet[341829]: <span class="console-critical">E0616 02:11:05.158309 341829 kubelet.go:1930] "Image garbage collection failed once. A disk pressure condition is set."</span>
+Jun 16 02:11:10 node-02 kubelet[341829]: <span class="console-highlight">I0616 02:11:10.201948 341829 eviction_manager.go:240] "Eviction manager: attempting to reclaim disk space"</span>
+Jun 16 02:11:12 node-02 kubelet[341829]: <span class="console-critical">W0616 02:11:12.482098 341829 eviction_manager.go:253] "Eviction manager: failed to reclaim disk space, threshold crossed."</span>
+<span class="console-tooltip">Image GC Failed: Kubelet이 자체 가비지 컬렉션을 시도하여 오래된 컨테이너 캐시 이미지를 자동 삭제하려 했으나, 런타임 락 또는 디스크 여유량 완전 고갈 상태로 인해 실패하고 경고 로그를 기록 중입니다.</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-gears" style="color: hsl(var(--accent)); margin-right: 6px;"></i><strong>3단계: Kubelet 데몬 상태 점검</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0; line-height: 1.6;">
+          <li style="margin-bottom: 6px;"><strong>Kubelet 프로세스는 구동 중:</strong> 프로세스가 다운되지는 않았으나 디스크 회수 불능 에러 로그를 쏟아내고 있습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>Garbage Collection (GC) 실패:</strong> 오래되거나 안 쓰는 이미지를 제거하려 시도했으나 삭제 한계 임계점 이하로 남은 공간이 극도로 부족해 복구하지 못했습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>Eviction Manager 동작:</strong> Kubelet 내부의 축출 매니저가 메모리/디스크 회수를 위해 파드들을 강제 eviction 처리하기 직전의 긴박한 루프를 도는 상태입니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 분석:</strong> Kubelet 설정 상의 문제는 없습니다. 실제로 디스크 공간이 꽉 차서 발생한 물리적 파일시스템 채워짐 상태이므로 컨테이너 런타임 데몬과 디스크 용량을 확인합니다.</li>
+        </ul>
+      `
+    },
+    runtime: {
+      console: `# [Step 4] Verify Container Runtime Daemon (CRI containerd 상태 점검)
+$ systemctl status containerd
+● containerd.service - containerd container runtime
+   Loaded: loaded (/lib/systemd/system/containerd.service; enabled; vendor preset: enabled)
+   Active: <span class="console-healthy">active (running)</span> since Mon 2026-06-15 12:00:00 EST; 14h ago
+   
+$ crictl info | grep -A 5 "conditions"
+  "conditions": [
+    { "type": "RuntimeReady", "status": true },
+    { "type": "NetworkReady", "status": true }
+  ]
+
+$ journalctl -u containerd -n 2 --no-pager
+Jun 16 02:11:08 node-02 containerd[1204]: <span class="console-critical">io.containerd.grpc.v1.cri: "Failed to create sandbox container: write /var/lib/containerd/... no space left on device"</span>
+<span class="console-tooltip">no space left on device: 컨테이너 런타임 containerd가 새로운 컨테이너 기동 요청을 수신했으나, 컨테이너용 쓰기 공간(OverlayFS / var/lib) 파일 쓰기 도중 디스크 가득 참(No space left on device)으로 쓰기가 실패하였습니다.</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-box-open" style="color: hsl(var(--accent)); margin-right: 6px;"></i><strong>4단계: CRI 컨테이너 런타임 상태 진단</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0; line-height: 1.6;">
+          <li style="margin-bottom: 6px;"><strong>containerd 서비스 작동 확인:</strong> 런타임 엔진 프로세스는 생존해 있으며 API 인터페이스(CRI Socket)도 응답하고 있습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>쓰기 연산 거부:</strong> 하지만 마스터로부터 수신된 신규 파드의 Sandbox 컨테이너(infra-container)를 생성하려 할 때 <code>no space left on device</code> 에러와 함께 생성이 원천 차단되고 있습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>overlayfs 드라이버 포화:</strong> 컨테이너 임시 저장 스택인 overlayfs 마운트 경로 전체가 물리 스토리지 포화로 얼어붙었습니다.</li>
+          <li style="margin-bottom: 0;"><strong>SRE 분석:</strong> 호스트 파일시스템 디스크 점유율을 실측하여 용량 누수 원인을 규명해야 합니다.</li>
+        </ul>
+      `
+    },
+    resources: {
+      console: `# [Step 5] Diagnose Host System Resources (호스트 디스크 잔여량 점검)
+$ df -h
+Filesystem      Size  Used Avail Use% Mounted on
+udev             63G     0   63G   0% /dev
+/dev/sda1        98G   98G    0G <span class="console-critical">100%</span> /           <span class="console-tooltip">Use% 100%: 루트 볼륨이 100% 점유되어 가용 공간이 0바이트입니다. 리눅스 시스템 전체에서 일체의 임시 파일 쓰기 및 로그 저장이 원천 거부되는 심각한 상태입니다.</span>
+tmpfs            13G  1.2M   13G   1% /run
+overlay          98G   98G    0G <span class="console-critical">100%</span> /var/lib/containerd/io.containerd.runtime.v2.task/k8s
+
+$ du -h -d 1 /var/lib | sort -h -r | head -n 3
+54G    /var/lib/containerd
+32G    /var/lib/kubelet
+
+$ du -ah /var/log/pods | sort -h -r | head -n 3
+45G    /var/log/pods/production-app-db-0_default/db-engine/0.log <span class="console-tooltip">45G log file: 특정 데이터베이스 애플리케이션의 컨테이너 내부 표준 출력 로그가 Log Rotation(로그 순환)이 먹히지 않아 45GB짜리 단일 파일로 커지면서 전체 디스크를 포화시켰습니다.</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-database" style="color: #ef4444; margin-right: 6px;"></i><strong>5단계: 호스트 시스템 스토리지 분석 및 근본 원인(RCA)</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0; line-height: 1.6;">
+          <li style="margin-bottom: 6px;"><strong>근본 원인 식별 (RCA):</strong> 데이터베이스 파드(<code>production-app-db-0</code>)의 로그 로테이션이 제대로 설정되지 않아 단일 로그 파일이 <strong>45GB</strong>까지 폭증, 루트 파티션(<code>/dev/sda1</code>)을 100% 가득 채웠습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>Kubelet 자가 치료 한계:</strong> 파일 크기가 지나치게 커서 Kubelet의 기본 가비지 컬렉션(GC)은 이 활성 사용 중인 로그 파일을 건드릴 수 없었습니다.</li>
+          <li style="margin-bottom: 6px;"><strong>즉시 긴급 복구 조치:</strong>
+            <br>&bull; 해당 활성 대형 로그 파일을 0으로 비웁니다: <code>cat /dev/null > /var/log/pods/production-app-db-0_default/db-engine/0.log</code> (파일을 delete하면 프로세스가 파일 디스크립터를 물고 있어 용량이 환수되지 않으므로 nulling 처리가 올바릅니다).
+            <br>&bull; Kubelet 및 Containerd를 재시작하여 정상 마운트 상태를 리셋합니다.
+          </li>
+          <li style="margin-bottom: 0;"><strong>장기 재발 방지책 (SRE Action Item):</strong> Kubelet 설정(<code>/etc/kubernetes/kubelet.config.json</code>) 또는 Docker/containerd 설정의 <code>container-log-max-size</code>를 10MB로 고정하고 <code>container-log-max-files</code>를 5개로 지정하여 로그 자동 롤링을 강제합니다.</li>
+        </ul>
+      `
+    },
+    network: {
+      console: `# [Step 6] Validate Network & CNI Status (네트워크 링크 및 CNI 검증)
+$ ip a | grep -E "eth|flannel|cali"
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default
+    inet 10.240.0.12/24 brd 10.240.0.255 scope global eth0
+4: flannel.1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1450 qdisc noqueue state UP
+
+$ ping -c 3 10.240.0.1
+3 packets transmitted, 3 received, 0% packet loss, time 2002ms
+rtt min/avg/max/mdev = 0.312/0.342/0.380/0.027 ms
+
+$ curl -k -s https://10.240.0.1:6443/healthz
+<span class="console-healthy">ok</span>
+<span class="console-tooltip">API Server Connectivity: 노드에서 마스터 노드의 API Server(6443 포트)로 향하는 게이트웨이 및 TLS 핸드셰이크가 정상 통과(ok)됩니다. 이는 물리 네트워크 연결성에는 전혀 문제가 없음을 확정합니다.</span>`,
+      analysis: `
+        <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-network-wired" style="color: #10b981; margin-right: 6px;"></i><strong>6단계: 네트워크 계층 및 CNI 검사 결과</strong></p>
+        <ul style="margin-left: 16px; margin-bottom: 0; line-height: 1.6;">
+          <li style="margin-bottom: 6px;"><strong>네트워크 경로 건강함:</strong> physical NIC(<code>eth0</code>)와 CNI 가상 브리지(<code>flannel.1</code>)가 작동하고 있으며 패킷 유실률이 0%입니다.</li>
+          <li style="margin-bottom: 6px;"><strong>API Server 연결 유효:</strong> 노드가 마스터 노드의 6443 포트에 잘 닿고 있으므로 통신 차단에 의한 NotReady가 아님이 명확합니다.</li>
+          <li style="margin-bottom: 6px;"><strong>결론:</strong> 네트워킹은 정상입니다. 오로지 5단계에서 도출된 스토리지 포화 요인이 이번 NotReady 사태의 단독 원인입니다.</li>
+          <li style="margin-bottom: 0;"><strong>최종 복구 확인:</strong> 대형 로그 비우기(Nulling) 수행 직후 디스크 여유가 환수되면 Kubelet의 DiskPressure 조건이 <code>False</code>로 자동 전환되고, 노드가 <code>Ready</code> 상태로 복구됩니다.</li>
+        </ul>
+      `
+    }
+  };
+
   const OVERVIEW_DATA = {
     // --- Linux Troubleshooting Scenarios ---
     "linux-q01-server-slow": {
@@ -1290,6 +1440,22 @@ $ tail -f training.log
         "nvidia-smi 및 Mellanox NIC 통계 도구를 활용한 분산 네트워킹 전송 효율 측정",
         "커널 TCP 소켓 전송 softirq 소프트인터럽트 점유 부하와 RDMA Kernel Bypass 실시간 리소스 비교",
         "대형 모델 병렬화 분산 확장 시 Linear Scaling 선형 확장을 가로막는 Straggler 병목 지점 해소"
+      ]
+    },
+    "k8s-q01-node-notready": {
+      title: "Kubernetes 노드 NotReady 장애 원인 규명 및 복구",
+      icon: "fa-solid fa-cubes",
+      summary: "쿠버네티스 워커 노드가 갑자기 NotReady 상태로 감지되는 장애 상황에서, 장애 영향 범위(Blast Radius) 격리부터 시작하여 Node Conditions, Kubelet 데몬, CRI containerd 런타임, OS 루트 볼륨(overlayfs) 및 CNI 네트워킹 상태를 단계별로 추적해 원인을 규명(RCA)하고 복구하는 과정을 진단합니다.",
+      questions: [
+        "노드가 NotReady 상태일 때 API 서버가 감지하는 하트비트(Heartbeat) 및 Lease 메커니즘과 상태 전환 기준은?",
+        "물리 호스트 서버가 정상 가동 중임에도 노드가 Ready=Unknown/False로 떨어질 수 있는 주요 요인은?",
+        "루트 파일시스템의 디스크 포화(DiskPressure)가 발생했을 때 Kubelet이 파드를 축출(Eviction)하는 기전은?"
+      ],
+      skills: [
+        "kubectl describe node 조건을 활용한 압박(Pressure) 조건 식별 및 진단",
+        "systemctl 및 journalctl 시스템 로그 분석을 통한 Kubelet/containerd 비정상 정지 추적",
+        "NFS/Overlayfs 디스크 포화 요인 격리 및 임시 컨테이너 캐시 자원 회수",
+        "CNI 네트워크 장애로 인한 노드 heartbeat 전달 실패 확인 및 API 서버 연결 포트(6443) 통신 복구"
       ]
     }
   };
@@ -1739,6 +1905,8 @@ $ tail -f training.log
       renderCodingLayout(doc);
     } else if (doc.category === "GPU & AI Infrastructure" && doc.sections.length > 2) {
       renderGpuLayout(doc);
+    } else if (doc.category === "Kubernetes" && doc.sections.length > 2) {
+      renderKubernetesLayout(doc);
     } else {
       renderGeneralLayout(doc);
     }
@@ -1841,6 +2009,587 @@ $ tail -f training.log
         card.classList.toggle('flipped');
       });
     });
+
+    bindStatusSelector(doc.id);
+  }
+
+  // 1.5. KUBERNETES TROUBLESHOOTING RENDERER (Kubernetes Node status investigator simulator)
+  function renderKubernetesLayout(doc) {
+    el.contentArea.classList.add('wide-layout');
+    const currentStatus = getStatus(doc.id);
+
+    // Extract key sections
+    const intent = doc.sections.find(s => s.title.includes("Intent"));
+    const english = doc.sections.find(s => s.title.includes("English") || s.title.includes("Answer"));
+    const korean = doc.sections.find(s => s.title.includes("Korean"));
+    const followups = doc.sections.find(s => s.title.includes("Follow-up"));
+    const notes = doc.sections.find(s => s.title.includes("Notes"));
+
+    let html = buildHeaderHTML(doc, currentStatus);
+
+    // Render Interview Question if it exists
+    const interviewQuestion = doc.sections.find(s => s.title.toLowerCase() === "interview question");
+    if (interviewQuestion) {
+      html += `
+        <div class="question-card" style="background: var(--card-bg); border-left: 4px solid hsl(var(--accent)); padding: 24px; border-radius: 12px; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); border: 1px solid var(--border-color); border-left-width: 4px;">
+          <div style="font-family: var(--font-heading); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: hsl(var(--accent)); margin-bottom: 12px; font-weight: 700; display: flex; align-items: center; gap: 8px;">
+            <i class="fa-solid fa-circle-question" style="font-size: 1rem;"></i> Interview Question (실제 질문)
+          </div>
+          <div style="font-size: 1.05rem; font-weight: 600; line-height: 1.6; color: var(--text-primary);">
+            ${convertToInterlinear(interviewQuestion.content)}
+          </div>
+        </div>
+      `;
+    }
+
+    if (doc.id === 'k8s-q01-node-notready') {
+      html += `
+        <h2 style="font-family: var(--font-heading); margin-bottom:12px; font-size:1.30rem; margin-top: 24px;">
+          <i class="fa-solid fa-cubes" style="color:hsl(var(--accent)); margin-right:8px;"></i>
+          Kubernetes Worker Node Status Investigator (쿠버네티스 노드 NotReady 진단 워크스페이스)
+        </h2>
+        
+        <div class="tcp-visualizer-card" style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 28px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);">
+          
+          <!-- Visual Nodes Diagram Container -->
+          <div class="dns-nodes-diagram" id="k8sNodesDiagram" style="background: rgba(0,0,0,0.15); border-radius: 12px; padding: 20px; border: 1px dashed var(--border-color); margin-bottom: 24px; position: relative; min-height: 220px; display: flex; align-items: center; justify-content: center; gap: 16px; transition: all 0.3s ease; flex-wrap: wrap;">
+             <!-- Dynamically updated by JS -->
+          </div>
+          
+          <!-- Interactive Selector Grid -->
+          <div class="cpu-dial-grid" id="k8sStepGrid" style="grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px;">
+            <div class="cpu-dial-card active" data-step="scope" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: hsl(var(--accent)); text-transform: uppercase;">Step 1. Determine Scope</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-crosshairs" style="margin-right:4px;"></i>장애 범위 판별 (Scope)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Single Node vs Cluster-wide</div>
+            </div>
+            <div class="cpu-dial-card" data-step="conditions" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Step 2. Inspect Conditions</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-heart-pulse" style="margin-right:4px;"></i>노드 조건 검사 (Conditions)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Ready, Disk/Mem Pressure</div>
+            </div>
+            <div class="cpu-dial-card" data-step="kubelet" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Step 3. Verify Kubelet</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-gears" style="margin-right:4px;"></i>Kubelet 상태 검사 (Daemon)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Process logs & Status</div>
+            </div>
+            <div class="cpu-dial-card" data-step="runtime" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Step 4. Verify Runtime</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-box-open" style="margin-right:4px;"></i>CRI 런타임 검사 (CRI)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">containerd health & OverlayFS</div>
+            </div>
+            <div class="cpu-dial-card" data-step="resources" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Step 5. Check Resources</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-database" style="margin-right:4px;"></i>시스템 자원 진단 (Storage)</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">Root FS space & Log files</div>
+            </div>
+            <div class="cpu-dial-card" data-step="network" style="padding: 12px;">
+              <div style="font-weight: 800; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;">Step 6. Check Network</div>
+              <div style="font-weight: 700; font-size: 0.95rem; margin: 4px 0 2px 0;"><i class="fa-solid fa-network-wired" style="margin-right:4px;"></i>네트워크 & CNI 검증</div>
+              <div style="font-size: 0.7rem; color: var(--text-secondary);">CNI state & API Server ping</div>
+            </div>
+          </div>
+          
+          <!-- Stats Panel -->
+          <div style="display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap;">
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #ef4444;" id="k8sHeartbeatIcon"><i class="fa-solid fa-heart-crack"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Lease Heartbeat (하트비트)</div>
+                <div id="k8sHeartbeatVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #ef4444; margin-top: 2px;">Unknown (Stalled)</div>
+              </div>
+            </div>
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #ef4444;" id="k8sDiskIcon"><i class="fa-solid fa-hard-drive"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Root Disk Usage (디스크 사용률)</div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                  <div style="flex-grow: 1; height: 8px; background: #334155; border-radius: 4px; overflow: hidden;">
+                    <div id="k8sDiskBar" style="width: 100%; height: 100%; background: #ef4444; transition: all 0.5s ease;"></div>
+                  </div>
+                  <span id="k8sDiskVal" style="font-size: 0.85rem; font-family: var(--font-mono); font-weight: bold; width: 45px; text-align: right; color: #ef4444;">100%</span>
+                </div>
+              </div>
+            </div>
+            <div style="flex: 1 1 180px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; display: flex; align-items: center; gap: 12px;">
+              <div style="font-size: 1.5rem; color: #10b981;"><i class="fa-solid fa-server"></i></div>
+              <div style="flex-grow: 1;">
+                <div style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: bold;">Kubelet Process (CPU / Mem)</div>
+                <div id="k8sKubeletProcVal" style="font-size: 1.15rem; font-family: var(--font-mono); font-weight: bold; color: #10b981; margin-top: 2px;">Active (0.2% CPU, 180MB)</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Output layout split -->
+          <div class="layout-split" style="margin-bottom: 0;">
+            <div class="layout-left" style="flex:1 1 500px; max-width: 100%;">
+              <div class="mock-terminal-wrapper" style="margin-bottom: 0; height:100%;">
+                <div class="terminal-tab-bar">
+                  <span class="terminal-tab active" id="k8sTerminalTitle"><i class="fa-solid fa-code" style="margin-right:6px;"></i>Kubelet & OS Diagnostics Console</span>
+                </div>
+                <div class="terminal-screen" style="min-height: 260px; padding: 16px; position:relative; overflow: visible;">
+                  <pre><code id="k8sConsoleOutput" style="color:#e2e8f0; white-space: pre-wrap; font-size: 0.85rem; font-family: var(--font-mono); display: block;"></code></pre>
+                </div>
+              </div>
+            </div>
+            <div class="layout-right" style="flex:1 1 350px; display: flex; flex-direction: column; gap: 16px;">
+              <div class="study-card" style="margin-bottom:0; flex-grow: 1;">
+                <div class="card-tabs"><span class="tab-btn active" style="cursor:default">장애 단계 진단 및 SRE 처방</span></div>
+                <div class="card-body" id="k8sAnalysisText" style="line-height:1.6; font-size:0.85rem; padding: 18px;">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+              
+              <!-- Remediation CTA Panel -->
+              <div id="k8sRemediationPanel" style="display: none; background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 16px; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+                <div style="flex: 1 1 200px;">
+                  <div style="font-weight: bold; font-size: 0.9rem; color: #f59e0b; margin-bottom: 4px;"><i class="fa-solid fa-triangle-exclamation"></i> Root Cause Discovered: Log Leak</div>
+                  <div style="font-size: 0.75rem; color: var(--text-secondary); line-height:1.4;">45GB database stdout log has saturated the root partition. Apply SRE nulling script.</div>
+                </div>
+                <button id="k8sRemediateBtn" class="tab-btn" style="background: #f59e0b; color: #0f172a; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 0.8rem; transition: all 0.2s;"><i class="fa-solid fa-wrench"></i> Remediate Node</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Accordion: Interviewer's Intent
+    if (intent) {
+      html += buildAccordion("Interviewer's Intent (면접관의 질문 의도)", intent.content);
+    }
+
+    // Render Answer split tab card
+    if (english || korean) {
+      html += `
+        <div class="study-card">
+          <div class="card-tabs">
+            <button class="tab-btn active" id="k8sTabEng">Recommended English Answer</button>
+            <button class="tab-btn" id="k8sTabKor">Korean Summary</button>
+          </div>
+          <div class="card-body">
+            <div class="tab-content active" id="k8sContentEng">
+              ${wrapActiveRecall(english ? english.content : '')}
+            </div>
+            <div class="tab-content" id="k8sContentKor">
+              ${buildInterlinearHTML(english ? english.content : '', korean ? korean.content : '')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Append other sections
+    let prepMaterials = '';
+    doc.sections.forEach(sec => {
+      const titleLower = sec.title.toLowerCase();
+      const skipKeys = ['intent', 'english', 'answer', 'korean', 'notes', 'interview question', 'status'];
+      if (skipKeys.some(k => titleLower.includes(k))) return;
+      if (doc.sections.length > 0 && sec.title === doc.sections[0].title) return;
+
+      prepMaterials += `<h3 style="font-family: var(--font-heading); margin-top: 24px; margin-bottom: 8px; font-size: 1.15rem; color: hsl(var(--accent)); border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">${sec.title}</h3>`;
+      prepMaterials += `<div>${convertToInterlinear(sec.content)}</div>`;
+    });
+
+    if (prepMaterials) {
+      html += buildAccordion("Preparation Study Materials (학습 고도화 상세 전략)", prepMaterials);
+    }
+
+    // Accordion: Followups
+    if (followups) {
+      html += `<h2 style="font-family: var(--font-heading); margin-top:28px; font-size:1.40rem;"><i class="fa-solid fa-graduation-cap" style="color:hsl(var(--accent)); margin-right:8px;"></i> Interactive Follow-up Practice (꼬리 질문 연습)</h2>`;
+      html += parseFollowupCards(followups.content);
+    }
+
+    // Personal Notes
+    if (notes) {
+      html += buildAccordion("Personal Notes & Study Guide", notes.content);
+    }
+
+    el.contentArea.innerHTML = html;
+
+    // Tabs listener
+    const tEng = document.getElementById('k8sTabEng');
+    const tKor = document.getElementById('k8sTabKor');
+    const cEng = document.getElementById('k8sContentEng');
+    const cKor = document.getElementById('k8sContentKor');
+
+    if (tEng && tKor) {
+      tEng.addEventListener('click', () => {
+        tEng.classList.add('active');
+        tKor.classList.remove('active');
+        cEng.classList.add('active');
+        cKor.classList.remove('active');
+      });
+      tKor.addEventListener('click', () => {
+        tKor.classList.add('active');
+        tEng.classList.remove('active');
+        cKor.classList.add('active');
+        cEng.classList.remove('active');
+      });
+    }
+
+    // Flip card listeners
+    document.querySelectorAll('.flip-card').forEach(card => {
+      card.addEventListener('click', () => {
+        card.classList.toggle('flipped');
+      });
+    });
+
+    // BIND SIMULATOR EVENTS
+    if (doc.id === 'k8s-q01-node-notready') {
+      const k8sStepCards = document.querySelectorAll('#k8sStepGrid .cpu-dial-card');
+      const k8sNodesDiagram = document.getElementById('k8sNodesDiagram');
+      const k8sHeartbeatIcon = document.getElementById('k8sHeartbeatIcon');
+      const k8sHeartbeatVal = document.getElementById('k8sHeartbeatVal');
+      const k8sDiskIcon = document.getElementById('k8sDiskIcon');
+      const k8sDiskBar = document.getElementById('k8sDiskBar');
+      const k8sDiskVal = document.getElementById('k8sDiskVal');
+      const k8sKubeletProcVal = document.getElementById('k8sKubeletProcVal');
+      const k8sConsoleOutput = document.getElementById('k8sConsoleOutput');
+      const k8sAnalysisText = document.getElementById('k8sAnalysisText');
+      const k8sTerminalTitle = document.getElementById('k8sTerminalTitle');
+      const k8sRemediationPanel = document.getElementById('k8sRemediationPanel');
+      const k8sRemediateBtn = document.getElementById('k8sRemediateBtn');
+
+      let isRemediated = false;
+      let activeStep = 'scope';
+
+      function updateK8sDiagram(stepKey, recovered = false) {
+        if (recovered) {
+          return `
+            <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; max-width: 600px; gap: 24px; position: relative;">
+                <!-- Master Node -->
+                <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 12px; width: 150px; text-align: center;">
+                  <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:bold; text-transform:uppercase;">Control Plane</div>
+                  <div style="font-size:0.9rem; font-weight:800; color:#10b981; margin-top:4px;"><i class="fa-solid fa-server"></i> API Server</div>
+                  <div style="font-size:0.6rem; color:#cbd5e1; margin-top:2px;">master-01 (v1.28.2)</div>
+                </div>
+                
+                <!-- Heartbeat Link -->
+                <div style="flex-grow: 1; height: 4px; background: #10b981; position: relative; display: flex; align-items: center; justify-content: center;">
+                  <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; box-shadow: 0 0 8px #10b981;"></div>
+                  <div style="position: absolute; top: -18px; font-size: 0.6rem; color: #10b981; font-weight: bold; background: var(--card-bg); padding: 1px 4px; border: 1px solid #10b981; border-radius: 3px;">HEARTBEAT OK (Lease renewed)</div>
+                </div>
+                
+                <!-- Worker Node 02 -->
+                <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 12px; width: 220px; text-align: center;">
+                  <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:bold; text-transform:uppercase;">Worker Node (node-02)</div>
+                  <div style="font-size:0.95rem; font-weight:800; color:#10b981; margin:4px 0;"><i class="fa-solid fa-circle-check"></i> STATUS: Ready</div>
+                  <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px; text-align: left; font-size: 0.65rem;">
+                    <div style="display:flex; justify-content:space-between; border-bottom: 1px solid var(--border-color); padding: 2px 0;"><span>DiskPressure</span><span style="color:#10b981; font-weight:bold;">False</span></div>
+                    <div style="display:flex; justify-content:space-between; border-bottom: 1px solid var(--border-color); padding: 2px 0;"><span>Root Partition</span><span style="color:#10b981; font-weight:bold;">46% Used (53G Free)</span></div>
+                    <div style="display:flex; justify-content:space-between; padding: 2px 0;"><span>Kubelet Lease</span><span style="color:#10b981; font-weight:bold;">Healthy (0.34s)</span></div>
+                  </div>
+                </div>
+              </div>
+              <div style="width: 100%; text-align: center; font-size: 0.75rem; color: #10b981; font-weight: bold;">
+                <i class="fa-solid fa-circle-check"></i> SRE Remediation Completed! The large database stdout log was successfully truncated, freeing 45GB. Kubelet lease checks and containerd write ops have recovered, restoring node-02 to Ready.
+              </div>
+            </div>
+          `;
+        }
+
+        if (stepKey === 'scope') {
+          return `
+            <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 16px;">
+              <div style="font-size: 0.75rem; color: var(--text-secondary); font-weight: bold; text-transform: uppercase;">Cluster-wide Node Status Inspection (전체 클러스터 노드 현황)</div>
+              <div style="display: flex; gap: 16px; width: 100%; justify-content: center; flex-wrap: wrap;">
+                <!-- Master Node -->
+                <div style="border: 2px solid #8b5cf6; background: rgba(139, 92, 246, 0.1); border-radius: 8px; padding: 10px; width: 100px; text-align: center;">
+                  <div style="font-size:0.55rem; color:var(--text-secondary); font-weight:bold;">Master Node</div>
+                  <div style="font-size:0.85rem; font-weight:800; margin: 2px 0; color: #8b5cf6;">master-01</div>
+                  <span style="background:#8b5cf6; color:white; font-size:0.55rem; padding:1px 4px; border-radius:3px; font-weight:bold;">CONTROL</span>
+                </div>
+                
+                <!-- Worker Node 01 -->
+                <div style="border: 2px solid #10b981; background: rgba(16, 185, 129, 0.1); border-radius: 8px; padding: 10px; width: 100px; text-align: center;">
+                  <div style="font-size:0.55rem; color:var(--text-secondary); font-weight:bold;">Worker Node</div>
+                  <div style="font-size:0.85rem; font-weight:800; margin: 2px 0; color: #10b981;">node-01</div>
+                  <span style="background:#10b981; color:white; font-size:0.55rem; padding:1px 4px; border-radius:3px; font-weight:bold;">READY</span>
+                </div>
+                
+                <!-- Worker Node 02 (Affected) -->
+                <div style="border: 2px solid #ef4444; background: rgba(239, 68, 68, 0.1); border-radius: 8px; padding: 10px; width: 100px; text-align: center; position: relative; animation: pulseEstablished 1s infinite;">
+                  <div style="font-size:0.55rem; color:var(--text-secondary); font-weight:bold;">Worker Node</div>
+                  <div style="font-size:0.85rem; font-weight:800; margin: 2px 0; color: #ef4444;">node-02</div>
+                  <span style="background:#ef4444; color:white; font-size:0.55rem; padding:1px 4px; border-radius:3px; font-weight:bold;">NOTREADY</span>
+                  <div style="position: absolute; top: -8px; right: -8px; background: #ef4444; color: white; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; border: 2px solid var(--card-bg); font-weight: bold;"><i class="fa-solid fa-exclamation"></i></div>
+                </div>
+                
+                <!-- Worker Node 03 -->
+                <div style="border: 2px solid #10b981; background: rgba(16, 185, 129, 0.1); border-radius: 8px; padding: 10px; width: 100px; text-align: center;">
+                  <div style="font-size:0.55rem; color:var(--text-secondary); font-weight:bold;">Worker Node</div>
+                  <div style="font-size:0.85rem; font-weight:800; margin: 2px 0; color: #10b981;">node-03</div>
+                  <span style="background:#10b981; color:white; font-size:0.55rem; padding:1px 4px; border-radius:3px; font-weight:bold;">READY</span>
+                </div>
+                
+                <!-- Worker Node 04 -->
+                <div style="border: 2px solid #10b981; background: rgba(16, 185, 129, 0.1); border-radius: 8px; padding: 10px; width: 100px; text-align: center;">
+                  <div style="font-size:0.55rem; color:var(--text-secondary); font-weight:bold;">Worker Node</div>
+                  <div style="font-size:0.85rem; font-weight:800; margin: 2px 0; color: #10b981;">node-04</div>
+                  <span style="background:#10b981; color:white; font-size:0.55rem; padding:1px 4px; border-radius:3px; font-weight:bold;">READY</span>
+                </div>
+              </div>
+              <div style="font-size: 0.75rem; color: #ef4444; font-weight: bold; text-align:center;">
+                <i class="fa-solid fa-circle-info"></i> Blast Radius: Only node-02 is affected. This indicates a node-level hardware/software problem, rather than a global routing or control plane issue.
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'conditions') {
+          return `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; max-width: 600px; gap: 24px; position: relative;">
+              <!-- Master Node -->
+              <div style="background: rgba(139, 92, 246, 0.1); border: 2px solid #8b5cf6; border-radius: 8px; padding: 12px; width: 150px; text-align: center;">
+                <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:bold; text-transform:uppercase;">Control Plane</div>
+                <div style="font-size:0.9rem; font-weight:800; color:#8b5cf6; margin-top:4px;"><i class="fa-solid fa-server"></i> API Server</div>
+              </div>
+              
+              <!-- Heartbeat Link -->
+              <div style="flex-grow: 1; height: 4px; background: #ef4444; position: relative; display: flex; align-items: center; justify-content: center; border-bottom: 2px dashed #ef4444;">
+                <div style="position: absolute; top: -18px; font-size: 0.6rem; color: #ef4444; font-weight: bold; background: var(--card-bg); padding: 1px 4px; border: 1px solid #ef4444; border-radius: 3px; animation: pulseEstablished 1s infinite;"><i class="fa-solid fa-heart-crack"></i> Lease Heartbeat Stalled</div>
+              </div>
+              
+              <!-- Worker Node 02 -->
+              <div style="background: rgba(239, 68, 68, 0.05); border: 2px solid #ef4444; border-radius: 8px; padding: 12px; width: 220px; text-align: center;">
+                <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:bold; text-transform:uppercase;">Worker Node (node-02)</div>
+                <div style="font-size:0.95rem; font-weight:800; color:#ef4444; margin:4px 0;"><i class="fa-solid fa-triangle-exclamation"></i> STATUS: NotReady</div>
+                <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px; text-align: left; font-size: 0.65rem;">
+                  <div style="display:flex; justify-content:space-between; border-bottom: 1px solid var(--border-color); padding: 2px 0;"><span>DiskPressure</span><span style="color:#ef4444; font-weight:bold; animation: pulseEstablished 0.8s infinite;"><i class="fa-solid fa-fire"></i> True</span></div>
+                  <div style="display:flex; justify-content:space-between; border-bottom: 1px solid var(--border-color); padding: 2px 0;"><span>MemoryPressure</span><span style="color:#10b981; font-weight:bold;">False</span></div>
+                  <div style="display:flex; justify-content:space-between; padding: 2px 0;"><span>NetworkUnavailable</span><span style="color:#10b981; font-weight:bold;">False</span></div>
+                </div>
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'kubelet') {
+          return `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; max-width: 600px; gap: 24px; position: relative;">
+              <!-- Master Node -->
+              <div style="background: rgba(139, 92, 246, 0.1); border: 2px solid #8b5cf6; border-radius: 8px; padding: 12px; width: 140px; text-align: center;">
+                <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:bold; text-transform:uppercase;">Control Plane</div>
+                <div style="font-size:0.9rem; font-weight:800; color:#8b5cf6; margin-top:4px;"><i class="fa-solid fa-server"></i> API Server</div>
+              </div>
+              
+              <!-- Dotted Sync Path -->
+              <div style="flex-grow: 1; height: 2px; border-bottom: 2px dashed #cbd5e1; position: relative;">
+                <div style="position: absolute; top:-12px; left:50%; transform:translateX(-50%); font-size:0.55rem; color:var(--text-secondary); white-space:nowrap;">Sync Check</div>
+              </div>
+              
+              <!-- Worker Node 02 Components -->
+              <div style="background: rgba(30, 41, 59, 0.6); border: 2px solid #475569; border-radius: 10px; padding: 12px; width: 260px; display:flex; flex-direction:column; gap:8px;">
+                <div style="font-size: 0.6rem; color: var(--text-secondary); font-weight: bold; text-align: center; text-transform: uppercase;">NODE-02 Diagnostics</div>
+                
+                <!-- Kubelet Daemon Box -->
+                <div style="background: rgba(14, 165, 233, 0.15); border: 2px solid #0ea5e9; border-radius: 6px; padding: 8px; text-align: center; position: relative; animation: pulseEstablished 1.2s infinite;">
+                  <div style="font-size: 0.8rem; font-weight: bold; color: #0ea5e9;"><i class="fa-solid fa-gears"></i> Kubelet Daemon</div>
+                  <div style="font-size: 0.6rem; color: #38bdf8; margin-top: 2px;">Status: RUNNING (posting ready failure)</div>
+                  <div style="position: absolute; top: -6px; right: 4px; background: #ef4444; color: white; font-size: 0.45rem; padding: 1px 3px; border-radius: 3px; font-weight: bold;">GC FAIL</div>
+                </div>
+                
+                <!-- CRI Runtime container -->
+                <div style="background: rgba(71, 85, 105, 0.2); border: 1px solid #475569; border-radius: 6px; padding: 6px; text-align: center; font-size: 0.75rem; color: var(--text-secondary); opacity: 0.7;">
+                  <i class="fa-solid fa-box-open"></i> Container Runtime (containerd)
+                </div>
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'runtime') {
+          return `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; max-width: 600px; gap: 24px; position: relative;">
+              <!-- Master Node -->
+              <div style="background: rgba(139, 92, 246, 0.1); border: 2px solid #8b5cf6; border-radius: 8px; padding: 12px; width: 140px; text-align: center;">
+                <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:bold; text-transform:uppercase;">Control Plane</div>
+                <div style="font-size:0.9rem; font-weight:800; color:#8b5cf6; margin-top:4px;"><i class="fa-solid fa-server"></i> API Server</div>
+              </div>
+              
+              <!-- Dotted Link -->
+              <div style="flex-grow: 1; height: 2px; border-bottom: 2px dashed #cbd5e1; position: relative;"></div>
+              
+              <!-- Worker Node 02 Components -->
+              <div style="background: rgba(30, 41, 59, 0.6); border: 2px solid #475569; border-radius: 10px; padding: 12px; width: 260px; display:flex; flex-direction:column; gap:8px;">
+                <div style="font-size: 0.6rem; color: var(--text-secondary); font-weight: bold; text-align: center; text-transform: uppercase;">NODE-02 Diagnostics</div>
+                
+                <!-- Kubelet Daemon Box -->
+                <div style="background: rgba(71, 85, 105, 0.2); border: 1px solid #475569; border-radius: 6px; padding: 6px; text-align: center; font-size: 0.75rem; color: var(--text-secondary); opacity: 0.7;">
+                  <i class="fa-solid fa-gears"></i> Kubelet Daemon (Idle Wait)
+                </div>
+                
+                <!-- CRI Runtime container -->
+                <div style="background: rgba(14, 165, 233, 0.15); border: 2px solid #0ea5e9; border-radius: 6px; padding: 8px; text-align: center; position: relative; animation: pulseEstablished 1.2s infinite;">
+                  <div style="font-size: 0.8rem; font-weight: bold; color: #0ea5e9;"><i class="fa-solid fa-box-open"></i> CRI Runtime (containerd)</div>
+                  <div style="font-size: 0.6rem; color: #ef4444; font-weight: bold; margin-top: 2px;"><i class="fa-solid fa-circle-exclamation"></i> Sandbox Creation Failed</div>
+                </div>
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'resources') {
+          return `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; max-width: 600px; gap: 24px; position: relative;">
+              <!-- Worker Node 02 Components -->
+              <div style="background: rgba(30, 41, 59, 0.6); border: 2px solid #475569; border-radius: 10px; padding: 12px; width: 260px; display:flex; flex-direction:column; gap:8px; margin: 0 auto;">
+                <div style="font-size: 0.6rem; color: var(--text-secondary); font-weight: bold; text-align: center; text-transform: uppercase;">NODE-02 Host Resources</div>
+                
+                <div style="display: flex; gap: 8px;">
+                  <!-- CPU/RAM Box -->
+                  <div style="flex: 1; background: rgba(16, 185, 129, 0.1); border: 1px solid #10b981; border-radius: 6px; padding: 8px; text-align: center; font-size: 0.7rem; color: #10b981;">
+                    <div style="font-weight: bold;"><i class="fa-solid fa-microchip"></i> CPU & RAM</div>
+                    <div style="font-size: 0.55rem; color: var(--text-secondary); margin-top: 2px;">RAM Free: 60%</div>
+                  </div>
+                  
+                  <!-- Disk Storage Box -->
+                  <div style="flex: 1; background: rgba(239, 68, 68, 0.15); border: 2px solid #ef4444; border-radius: 6px; padding: 8px; text-align: center; position: relative; animation: pulseEstablished 0.8s infinite;">
+                    <div style="font-size: 0.7rem; font-weight: bold; color: #ef4444;"><i class="fa-solid fa-hard-drive"></i> Root Disk</div>
+                    <div style="font-size: 0.6rem; font-weight: 800; color: #ef4444; margin-top: 2px;">100% FULL</div>
+                    
+                    <div style="position: absolute; bottom: -8px; right: -8px; background: #ef4444; color: white; border-radius: 3px; font-size: 0.5rem; padding: 1px 4px; border: 1px solid #1e293b; font-weight: bold;">
+                      <i class="fa-solid fa-file-lines"></i> 45GB Log!
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        } else if (stepKey === 'network') {
+          return `
+            <div style="width: 100%; display: flex; justify-content: space-between; align-items: center; max-width: 600px; gap: 24px; position: relative;">
+              <!-- Master Node -->
+              <div style="background: rgba(139, 92, 246, 0.1); border: 2px solid #8b5cf6; border-radius: 8px; padding: 12px; width: 140px; text-align: center;">
+                <div style="font-size:0.65rem; color:var(--text-secondary); font-weight:bold; text-transform:uppercase;">Control Plane</div>
+                <div style="font-size:0.9rem; font-weight:800; color:#8b5cf6; margin-top:4px;"><i class="fa-solid fa-server"></i> API Server</div>
+              </div>
+              
+              <!-- Ping Packets flowing -->
+              <div style="flex-grow: 1; height: 4px; background: #10b981; position: relative; display: flex; align-items: center; justify-content: center;">
+                <div class="animated-packet-dot to-server" style="width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; position: absolute; box-shadow: 0 0 8px #10b981;"></div>
+                <div style="position: absolute; top: -16px; font-size: 0.55rem; color: #10b981; font-weight: bold;">ICMP Ping & API 6443 CONNECT OK</div>
+              </div>
+              
+              <!-- Worker Node 02 Components -->
+              <div style="background: rgba(16, 185, 129, 0.05); border: 2px solid #10b981; border-radius: 8px; padding: 10px; width: 160px; text-align: center;">
+                <div style="font-size: 0.65rem; color: var(--text-secondary); font-weight: bold;">CNI Link (node-02)</div>
+                <div style="font-size: 0.8rem; font-weight: bold; color: #10b981; margin: 4px 0;"><i class="fa-solid fa-network-wired"></i> CNI: flannel.1</div>
+                <span style="background:#10b981; color:white; font-size:0.5rem; padding:1px 3px; border-radius:3px; font-weight:bold;">LINK UP</span>
+              </div>
+            </div>
+          `;
+        }
+        return '';
+      }
+
+      function updateK8sSimulator(stepKey) {
+        activeStep = stepKey;
+        const modeData = k8sSimData[stepKey];
+        if (!modeData) return;
+
+        if (isRemediated) {
+          k8sTerminalTitle.innerHTML = `<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>SRE Diagnostics Console - [Step ${stepKey === 'scope' ? 1 : stepKey === 'conditions' ? 2 : stepKey === 'kubelet' ? 3 : stepKey === 'runtime' ? 4 : stepKey === 'resources' ? 5 : 6}] (RECOVERED)`;
+          k8sHeartbeatIcon.innerHTML = `<i class="fa-solid fa-heart"></i>`;
+          k8sHeartbeatIcon.style.color = '#10b981';
+          k8sHeartbeatVal.textContent = '0.34s (Healthy)';
+          k8sHeartbeatVal.style.color = '#10b981';
+          
+          k8sDiskIcon.style.color = '#10b981';
+          k8sDiskBar.style.width = '46%';
+          k8sDiskBar.style.background = '#10b981';
+          k8sDiskVal.textContent = '46%';
+          k8sDiskVal.style.color = '#10b981';
+
+          k8sNodesDiagram.innerHTML = updateK8sDiagram(stepKey, true);
+          
+          if (stepKey === 'resources') {
+            k8sConsoleOutput.innerHTML = `# [Step 5] Diagnose Host System Resources (디스크 여유 공간 환수 완료)
+$ df -h
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        98G   45G   53G  <span class="console-healthy">46%</span> /  (SRE Log file nulling applied: freed 45GB)
+overlay          98G   45G   53G  <span class="console-healthy">46%</span> /var/lib/containerd/...
+
+$ du -h -d 1 /var/log/pods | sort -h -r | head -n 3
+24K    /var/log/pods/production-app-db-0_default/db-engine/0.log (Successfully nullified)
+
+# Kubelet disk pressure evicted check:
+$ kubectl get node node-02 -o jsonpath='{.status.conditions[?(@.type=="DiskPressure")].status}'
+False (DiskPressure condition cleared)`;
+            k8sAnalysisText.innerHTML = `
+              <p style="font-size: 0.95rem; margin-bottom: 12px;"><i class="fa-solid fa-circle-check" style="color: #10b981; margin-right: 6px;"></i><strong>장애 조치 성공 및 디스크 회수 완료</strong></p>
+              <ul style="margin-left: 16px; margin-bottom: 0; line-height: 1.6;">
+                <li style="margin-bottom: 6px;"><strong>용량 복구:</strong> 45GB 크기의 데이터베이스 stdout 로그 파일을 0으로 비워 디스크 사용률이 46%로 격하되었습니다.</li>
+                <li style="margin-bottom: 6px;"><strong>Kubelet 압박 해제:</strong> 디스크 압박 임계값 이하로 용량이 확보되자 Kubelet은 <code>DiskPressure=False</code>로 자동 갱신하였습니다.</li>
+                <li style="margin-bottom: 0;"><strong>클러스터 재합류:</strong> 노드가 정상 통신을 시작하여 <code>NotReady</code>를 벗어나 <code>Ready</code> 상태로 원상 복구되었습니다.</li>
+              </ul>
+            `;
+          } else {
+            k8sConsoleOutput.innerHTML = modeData.console;
+            k8sAnalysisText.innerHTML = modeData.analysis;
+          }
+          k8sRemediationPanel.style.display = 'none';
+        } else {
+          k8sTerminalTitle.innerHTML = `<i class="fa-solid fa-terminal" style="margin-right:6px;"></i>SRE Diagnostics Console - [Step ${stepKey === 'scope' ? 1 : stepKey === 'conditions' ? 2 : stepKey === 'kubelet' ? 3 : stepKey === 'runtime' ? 4 : stepKey === 'resources' ? 5 : 6}] (FAULT ACTIVE)`;
+          
+          k8sHeartbeatIcon.innerHTML = `<i class="fa-solid fa-heart-crack"></i>`;
+          k8sHeartbeatIcon.style.color = '#ef4444';
+          k8sHeartbeatVal.textContent = stepKey === 'conditions' ? 'Stalled (45s ago)' : 'Unknown (Stalled)';
+          k8sHeartbeatVal.style.color = '#ef4444';
+          
+          k8sDiskIcon.style.color = '#ef4444';
+          k8sDiskBar.style.width = '100%';
+          k8sDiskBar.style.background = '#ef4444';
+          k8sDiskVal.textContent = '100%';
+          k8sDiskVal.style.color = '#ef4444';
+
+          k8sNodesDiagram.innerHTML = updateK8sDiagram(stepKey, false);
+          k8sConsoleOutput.innerHTML = modeData.console;
+          k8sAnalysisText.innerHTML = modeData.analysis;
+
+          if (stepKey === 'resources' || stepKey === 'network') {
+            k8sRemediationPanel.style.display = 'flex';
+          } else {
+            k8sRemediationPanel.style.display = 'none';
+          }
+        }
+      }
+
+      k8sStepCards.forEach(card => {
+        card.addEventListener('click', () => {
+          k8sStepCards.forEach(c => {
+            c.classList.remove('active');
+            c.querySelector('div:first-child').style.color = 'var(--text-secondary)';
+          });
+          card.classList.add('active');
+          card.querySelector('div:first-child').style.color = 'hsl(var(--accent))';
+
+          const stepKey = card.dataset.step;
+          updateK8sSimulator(stepKey);
+        });
+      });
+
+      k8sRemediateBtn.addEventListener('click', () => {
+        k8sRemediateBtn.disabled = true;
+        k8sRemediateBtn.style.opacity = '0.6';
+        k8sRemediateBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Truncating Log File...';
+
+        k8sConsoleOutput.innerHTML += `\n\n<span style="color: #f59e0b;"># Executing SRE Remediation on node-02:
+$ cat /dev/null > /var/log/pods/production-app-db-0_default/db-engine/0.log
+$ systemctl restart containerd kubelet
+Reclaiming storage volume space... active.</span>`;
+
+        setTimeout(() => {
+          k8sRemediateBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Re-starting Kubelet & Containerd...';
+
+          setTimeout(() => {
+            isRemediated = true;
+            k8sRemediateBtn.disabled = false;
+            k8sRemediateBtn.style.opacity = '1';
+            k8sRemediateBtn.innerHTML = '<i class="fa-solid fa-wrench"></i> Remediate Node';
+            updateK8sSimulator(activeStep);
+          }, 1500);
+        }, 1200);
+      });
+
+      // Initialize
+      updateK8sSimulator('scope');
+    }
 
     bindStatusSelector(doc.id);
   }
